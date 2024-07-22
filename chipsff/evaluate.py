@@ -99,6 +99,7 @@ class Evaluator(object):
             kv = self.ev_curve(atoms=atoms)
             print(energy, kv)
             surface_energy = self.surface_energy(atoms=atoms)
+            vacancy_energy = self.vacancy_energy(atoms=atoms)
 
     def surface_energy(self, atoms=None, jid="x"):
         spg = Spacegroup3D(atoms=atoms)
@@ -152,11 +153,13 @@ class Evaluator(object):
             self.get_energy(
                 atoms=atoms, cell_relax=True, constant_volume=False
             )[0]
-            / cvn.num_atoms
+            / atoms.num_atoms
         )
         vacancy_results = []
         for j in strts:
-            strt = j.to_dict()["defect_structure"].center_around_origin()
+            strt = Atoms.from_dict(
+                j.to_dict()["defect_structure"]
+            ).center_around_origin()
             name = (
                 str(jid)
                 + "_"
@@ -166,10 +169,10 @@ class Evaluator(object):
                 + "_"
                 + j.to_dict()["wyckoff_multiplicity"]
             )
-            if j.to_dict()["symbol"] in chem_pot_ref:
-                atoms_en = chem_pot_ref[j.to_dict()["symbol"]]
+            if j.to_dict()["symbol"] in self.chem_pot_ref:
+                atoms_en = self.chem_pot_ref[j.to_dict()["symbol"]]
             else:
-                jid_elemental = chem_pot[j.to_dict()["symbol"]["jid"]]
+                jid_elemental = chem_pot[j.to_dict()["symbol"]]["jid"]
                 atoms_elemental = Atoms.from_dict(
                     get_jid_data(jid=jid_elemental, dataset="dft_3d")["atoms"]
                 )
@@ -180,6 +183,7 @@ class Evaluator(object):
                         constant_volume=False,
                     )[0]
                 ) / atoms_elemental.num_atoms
+                self.chem_pot_ref[j.to_dict()["symbol"]] = atoms_en
             defect_en = (
                 self.get_energy(
                     atoms=strt, cell_relax=True, constant_volume=False
@@ -190,6 +194,7 @@ class Evaluator(object):
             info = {}
             info["name"] = name
             info["defect_en"] = defect_en
+            print(name, defect_en)
             vacancy_results.append(info)
         return vacancy_results
 
