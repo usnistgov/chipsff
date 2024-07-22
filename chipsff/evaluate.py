@@ -15,6 +15,7 @@ from jarvis.analysis.structure.spacegroup import (
 from jarvis.analysis.defects.surface import Surface
 from jarvis.analysis.defects.vacancy import Vacancy
 from jarvis.analysis.thermodynamics.energetics import get_optb88vdw_energy
+import ase
 
 
 class Evaluator(object):
@@ -96,10 +97,23 @@ class Evaluator(object):
             id = i[self.id_tag]
             atoms = Atoms.from_dict(i["atoms"])
             energy, optim_atoms = self.get_energy(atoms=atoms)
+            elastic_tensor = self.elastic_tensor(atoms=atoms)
             kv = self.ev_curve(atoms=atoms)
             print(energy, kv)
             surface_energy = self.surface_energy(atoms=atoms)
             vacancy_energy = self.vacancy_energy(atoms=atoms)
+
+    def elastic_tensor(self, atoms=None):
+        from elastic import get_elementary_deformations, get_elastic_tensor
+        import elastic
+
+        ase_atoms = atoms.ase_converter()
+        ase_atoms.calc = self.calculator
+        systems = get_elementary_deformations(ase_atoms)
+        cij_order = elastic.elastic.get_cij_order(ase_atoms)
+        Cij, Bij = get_elastic_tensor(ase_atoms, systems)
+        for i, j in zip(cij_order, Cij):
+            print(i, j / ase.units.GPa)
 
     def surface_energy(self, atoms=None, jid="x"):
         spg = Spacegroup3D(atoms=atoms)
