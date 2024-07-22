@@ -8,6 +8,13 @@ from ase.calculators.emt import EMT
 from jarvis.core.atoms import Atoms
 from ase.eos import EquationOfState
 from ase.units import kJ
+from jarvis.analysis.structure.spacegroup import (
+    Spacegroup3D,
+    symmetrically_distinct_miller_indices,
+)
+from jarvis.analysis.defects.surface import Surface
+from jarvis.analysis.defects.vacancy import Vacancy
+from jarvis.analysis.thermodynamics.energetics import get_optb88vdw_energy
 
 
 class Evaluator(object):
@@ -27,6 +34,7 @@ class Evaluator(object):
             "surface_formation",
             "zpe",
         ],
+        chem_pot_ref={},
     ):
         self.atoms_dataset = atoms_dataset
         if isinstance(atoms_dataset, str):
@@ -40,6 +48,7 @@ class Evaluator(object):
         self.max_miller_index = max_miller_index
         if self.calculator is None:
             self.calculator = self.setup_calculator()
+        self.chem_pot_ref = chem_pot_ref
 
     # TODO: import from intermat
     # https://github.com/usnistgov/intermat/blob/main/intermat/calculators.py
@@ -69,10 +78,13 @@ class Evaluator(object):
         else:
             raise ValueError("Unsupported calculator type")
 
-    def general_relaxer(self, atoms=None):
+    def get_energy(self, atoms=None, cell_relax=True, constant_volume=False):
         ase_atoms = atoms.ase_converter()
         ase_atoms.calc = self.calculator
-        ase_atoms = ExpCellFilter(ase_atoms)
+        if not cell_relax:
+            en = ase_atoms.get_potential_energy()
+            return en, atoms
+        ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
         # TODO: Make it work with any other optimizer
         dyn = FIRE(ase_atoms)
         dyn.run(fmax=self.fmax, steps=self.nsteps)
@@ -83,16 +95,24 @@ class Evaluator(object):
         for i in self.atoms_dataset:
             id = i[self.id_tag]
             atoms = Atoms.from_dict(i["atoms"])
-            energy, optim_atoms = self.general_relaxer(atoms=atoms)
+            energy, optim_atoms = self.get_energy(atoms=atoms)
             kv = self.ev_curve(atoms=atoms)
             print(energy, kv)
+            surface_energy = self.surface_energy(atoms=atoms)
 
     def surface_energy(self, atoms=None, jid="x"):
-        spg = Spacegroup3D(atoms=a)
+        spg = Spacegroup3D(atoms=atoms)
         cvn = spg.conventional_standard_structure
         mills = symmetrically_distinct_miller_indices(
             max_index=self.max_miller_index, cvn_atoms=cvn
         )
+        bulk_enp = (
+            self.get_energy(atoms=cvn, cell_relax=True, constant_volume=False)[
+                0
+            ]
+            / cvn.num_atoms
+        )
+        surface_results = []
         for j in mills:
             surf = Surface(
                 atoms=cvn, indices=j, thickness=25, vacuum=15
@@ -104,11 +124,37 @@ class Evaluator(object):
                 + "_"
                 + str("_".join(map(str, j)))
             )
+            m = surf.lattice.matrix
+            area = np.linalg.norm(np.cross(m[0], m[1]))
+            surf_en = (
+                16
+                * (
+                    self.get_energy(
+                        atoms=surf, cell_relax=True, constant_volume=False
+                    )[0]
+                    - bulk_enp * surf.num_atoms
+                )
+                / (2 * area)
+            )
+            info = {}
+            info["name"] = name
+            info["surf_en"] = surf_en
+            print(name, surf_en)
+            surface_results.append(info)
+        return surface_results
 
     def vacancy_energy(self, atoms=None, jid="x"):
+        chem_pot = get_optb88vdw_energy()
         strts = Vacancy(atoms).generate_defects(
             on_conventional_cell=True, enforce_c_size=10, extend=1
         )
+        bulk_enp = (
+            self.get_energy(
+                atoms=atoms, cell_relax=True, constant_volume=False
+            )[0]
+            / cvn.num_atoms
+        )
+        vacancy_results = []
         for j in strts:
             strt = j.to_dict()["defect_structure"].center_around_origin()
             name = (
@@ -120,6 +166,32 @@ class Evaluator(object):
                 + "_"
                 + j.to_dict()["wyckoff_multiplicity"]
             )
+            if j.to_dict()["symbol"] in chem_pot_ref:
+                atoms_en = chem_pot_ref[j.to_dict()["symbol"]]
+            else:
+                jid_elemental = chem_pot[j.to_dict()["symbol"]["jid"]]
+                atoms_elemental = Atoms.from_dict(
+                    get_jid_data(jid=jid_elemental, dataset="dft_3d")["atoms"]
+                )
+                atoms_en = (
+                    self.get_energy(
+                        atoms=atoms_elemental,
+                        cell_relax=True,
+                        constant_volume=False,
+                    )[0]
+                ) / atoms_elemental.num_atoms
+            defect_en = (
+                self.get_energy(
+                    atoms=strt, cell_relax=True, constant_volume=False
+                )[0]
+                - bulk_enp * strt.num_atoms
+                + atoms_en
+            )
+            info = {}
+            info["name"] = name
+            info["defect_en"] = defect_en
+            vacancy_results.append(info)
+        return vacancy_results
 
     def phonons(
         atoms=None,
