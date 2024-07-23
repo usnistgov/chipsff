@@ -59,7 +59,7 @@
         "jid": "JVASP-840",
         "energy_alignn_ff": 0.111092,
         "energy_chgnet": -1.6219065,
-        "energy_matgl": -1.57035975,
+        "energy_matgl": -1.57035975, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -1.918754
     },
     "H": {
@@ -73,7 +73,7 @@
         "jid": "JVASP-25144",
         "energy_alignn_ff": -3.936694,
         "energy_chgnet": -5.403327,
-        "energy_matgl": -5.35841075,
+        "energy_matgl": -5.35841075, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -5.41365725
     },
     "Os": {
@@ -164,7 +164,7 @@
         "jid": "JVASP-25125",
         "energy_alignn_ff": -1.8107043333333335,
         "energy_chgnet": -4.564541333333334,
-        "energy_matgl": -4.5620140000000005,
+        "energy_matgl": -4.5620140000000005, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -4.573492333333333
     },
     "Hf": {
@@ -206,21 +206,21 @@
         "jid": "JVASP-922",
         "energy_alignn_ff": -4.3859348275862065,
         "energy_chgnet": -9.111478793103448,
-        "energy_matgl": -9.133505999999999,
+        "energy_matgl": -9.133505999999999, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -9.164792827586208
     },
     "O": {
         "jid": "JVASP-949",
         "energy_alignn_ff": -3.092893625,
         "energy_chgnet": -4.93406625,
-        "energy_matgl": -4.92246625,
-        "energy_mace": -5.090092625
+        "energy_matgl": -4.92246625, #did not fully converge to 0.05 eV/Angstrom
+        "energy_mace": -5.090092625 #did not fully converge to 0.05 eV/Angstrom
     },
     "S": {
         "jid": "JVASP-95268",
         "energy_alignn_ff": -2.49916290625,
-        "energy_chgnet": -4.150040625,
-        "energy_matgl": -4.0800199375,
+        "energy_chgnet": -4.15215875,
+        "energy_matgl": -4.0800199375, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -4.11382196875
     },
     "W": {
@@ -248,7 +248,7 @@
         "jid": "JVASP-102277",
         "energy_alignn_ff": -1.8103855,
         "energy_chgnet": -4.54730325,
-        "energy_matgl": -4.5462495,
+        "energy_matgl": -4.5462495, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -4.57055375
     },
     "Ni": {
@@ -297,21 +297,21 @@
         "jid": "JVASP-828",
         "energy_alignn_ff": -5.147107083333333,
         "energy_chgnet": -6.5688657500000005,
-        "energy_matgl": -6.606697083333334,
+        "energy_matgl": -6.606697083333334, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -6.587750083333333
     },
     "F": {
         "jid": "JVASP-33718",
         "energy_alignn_ff": 0.11726725,
         "energy_chgnet": -1.901216,
-        "energy_matgl": -1.96192525,
+        "energy_matgl": -1.96192525, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -1.90583125
     },
     "N": {
         "jid": "JVASP-25250",
         "energy_alignn_ff": -6.776678,
         "energy_chgnet": -8.35449975,
-        "energy_matgl": -8.3266505,
+        "energy_matgl": -8.32737725,
         "energy_mace": -8.3102885
     },
     "Kr": {
@@ -360,14 +360,14 @@
         "jid": "JVASP-993",
         "energy_alignn_ff": -2.089857,
         "energy_chgnet": -4.0672785,
-        "energy_matgl": -4.1045905,
+        "energy_matgl": -4.1050825,
         "energy_mace": -4.0842765
     },
     "Se": {
         "jid": "JVASP-7804",
         "energy_alignn_ff": -1.7824116666666667,
         "energy_chgnet": -3.5392023333333333,
-        "energy_matgl": -3.4692326666666666,
+        "energy_matgl": -3.4793353333333332,
         "energy_mace": -3.4744116666666667
     },
     "Co": {
@@ -381,7 +381,7 @@
         "jid": "JVASP-25104",
         "energy_alignn_ff": -0.13556325,
         "energy_chgnet": -1.8968495,
-        "energy_matgl": -1.82130125,
+        "energy_matgl": -1.8235,
         "energy_mace": -1.83524975
     },
     "Ca": {
@@ -507,14 +507,14 @@
         "jid": "JVASP-895",
         "energy_alignn_ff": 0.43406375,
         "energy_chgnet": -1.5900875,
-        "energy_matgl": -1.51894975,
-        "energy_mace": -1.70055625
+        "energy_matgl": -1.51894975, #did not fully converge to 0.05 eV/Angstrom
+        "energy_mace": -1.7035675
     },
     "U": {
         "jid": "JVASP-14725",
         "energy_alignn_ff": -7.5724695,
         "energy_chgnet": -11.169176,
-        "energy_matgl": -11.181288,
+        "energy_matgl": -11.181288, #did not fully converge to 0.05 eV/Angstrom
         "energy_mace": -11.2126675
     },
     "Y": {
