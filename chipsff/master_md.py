@@ -338,7 +338,7 @@ def general_melter(jid='', atoms=None, calculator=None, log_file=None, job_info=
 
     return final_atoms
 
-def calculate_rdf(ase_atoms, jid, calculator_type, output_dir, log_file, job_info, rmax=3.5, nbins=200):
+def calculate_rdf(ase_atoms, jid, calculator_type, output_dir, log_file, job_info, rmax=4.5, nbins=200):
     def perform_rdf_calculation(rmax):
         rdfs, distances = get_rdf(ase_atoms, rmax, nbins)
         plt.figure()
@@ -1095,7 +1095,7 @@ from alignn.ff.ff import phonons3
 model_path = default_path()
 #calculator_types = ["matgl","chgnet","alignn_ff","mace"]
 
-ids = ['JVASP-32']
+ids = ['JVASP-30']
 calculator_types = ["alignn_ff","chgnet","mace","sevennet"]
 
 for calculator_type in calculator_types:
