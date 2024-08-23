@@ -25,7 +25,7 @@ from mace.calculators import mace_mp
 def setup_calculator(calculator_type):
     if calculator_type == "matgl":
         pot = matgl.load_model("M3GNet-MP-2021.2.8-PES")
-        return M3GNetCalculator(pot)
+        return M3GNetCalculator(pot,compute_stress=True,stress_weight=0.01)
     elif calculator_type == "alignn_ff":
         model_path = default_path()
         return AlignnAtomwiseCalculator(path=model_path,stress_wt=0.3,force_mult_natoms=False,force_multiplier=1,modl_filename=model_filename)
