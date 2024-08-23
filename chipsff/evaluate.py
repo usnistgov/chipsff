@@ -16,6 +16,15 @@ from jarvis.analysis.defects.surface import Surface
 from jarvis.analysis.defects.vacancy import Vacancy
 from jarvis.analysis.thermodynamics.energetics import get_optb88vdw_energy
 import ase
+from jarvis.core.kpoints import Kpoints3D as Kpoints
+from phonopy import Phonopy
+from phonopy.file_IO import (
+    write_FORCE_CONSTANTS,
+)
+import os
+import matplotlib.pyplot as plt
+from ase import Atoms as AseAtoms
+from collections import defaultdict
 
 
 class Evaluator(object):
@@ -36,6 +45,8 @@ class Evaluator(object):
             "zpe",
         ],
         chem_pot_ref={},
+        alignn_model_path=None,
+        output_dir="out",
     ):
         self.atoms_dataset = atoms_dataset
         if isinstance(atoms_dataset, str):
@@ -46,10 +57,14 @@ class Evaluator(object):
         self.nsteps = nsteps
         self.calculator = calculator
         self.id_tag = id_tag
+        self.alignn_model_path = alignn_model_path
         self.max_miller_index = max_miller_index
         if self.calculator is None:
             self.calculator = self.setup_calculator()
+        if not chem_pot_ref:
+            chem_pot_ref = defaultdict()
         self.chem_pot_ref = chem_pot_ref
+        self.output_dir = output_dir
 
     # TODO: import from intermat
     # https://github.com/usnistgov/intermat/blob/main/intermat/calculators.py
@@ -64,22 +79,36 @@ class Evaluator(object):
         elif self.calculator_type == "ALIGNN-FF":
             from alignn.ff.ff import AlignnAtomwiseCalculator, default_path
 
-            model_path = default_path()
+            # modl_path = "/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp/out111continue5"
+            # model_path = "aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111"
+            # model_path = "/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111a"
+            # model_path = "/wrk/knc6/AFFBench/fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111"
+            if self.alignn_model_path is None:
+
+                model_path = default_path()
+            else:
+                model_path = self.alignn_model_path
             return AlignnAtomwiseCalculator(
-                path=model_path, stress_wt=0.3, force_mult_natoms=True
+                # path=model_path, stress_wt=0.3, model_filename='best_model.pt',force_mult_natoms=False
+                path=model_path,
+                stress_wt=0.3,
+                model_filename="current_model.pt",
+                force_mult_natoms=False,
             )
-        elif calculator_type == "CHGNet":
+        elif self.calculator_type == "CHGNet":
             from chgnet.model.dynamics import CHGNetCalculator
 
             return CHGNetCalculator()
-        elif calculator_type == "MACE":
+        elif self.calculator_type == "MACE":
             from mace.calculators import mace_mp
 
             return mace_mp()
         else:
             raise ValueError("Unsupported calculator type")
 
-    def get_energy(self, atoms=None, cell_relax=True, constant_volume=False):
+    def get_energy(
+        self, atoms=None, cell_relax=True, constant_volume=False, id=None
+    ):
         ase_atoms = atoms.ase_converter()
         ase_atoms.calc = self.calculator
         if not cell_relax:
@@ -90,20 +119,24 @@ class Evaluator(object):
         dyn = FIRE(ase_atoms)
         dyn.run(fmax=self.fmax, steps=self.nsteps)
         en = ase_atoms.atoms.get_potential_energy()
-        return en, ase_to_atoms(ase_atoms.atoms)
+        final_atoms = ase_to_atoms(ase_atoms.atoms)
+        return en, final_atoms
 
     def run_all(self):
         for i in self.atoms_dataset:
             id = i[self.id_tag]
             atoms = Atoms.from_dict(i["atoms"])
-            energy, optim_atoms = self.get_energy(atoms=atoms)
-            elastic_tensor = self.elastic_tensor(atoms=atoms)
-            kv = self.ev_curve(atoms=atoms)
-            print(energy, kv)
-            surface_energy = self.surface_energy(atoms=atoms)
-            vacancy_energy = self.vacancy_energy(atoms=atoms)
+            print("atoms", atoms)
+            energy, optim_atoms = self.get_energy(atoms=atoms, id=id)
+            print("final atoms", optim_atoms)
+            elastic_tensor = self.elastic_tensor(atoms=optim_atoms, id=id)
+            kv = self.ev_curve(atoms=optim_atoms, id=id)
+            surface_energy = self.surface_energy(atoms=optim_atoms, id=id)
+            vacancy_energy = self.vacancy_energy(atoms=optim_atoms, id=id)
+            print("energy, kv,elastic_tensor", energy, kv, elastic_tensor)
+            self.phonons(atoms=optim_atoms, id=id)
 
-    def elastic_tensor(self, atoms=None):
+    def elastic_tensor(self, atoms=None, id=None):
         from elastic import get_elementary_deformations, get_elastic_tensor
         import elastic
 
@@ -112,19 +145,23 @@ class Evaluator(object):
         systems = get_elementary_deformations(ase_atoms)
         cij_order = elastic.elastic.get_cij_order(ase_atoms)
         Cij, Bij = get_elastic_tensor(ase_atoms, systems)
+        c11 = ""
         for i, j in zip(cij_order, Cij):
             print(i, j / ase.units.GPa)
+            if i == "C_11":
+                c11 = j / ase.units.GPa
+        return c11
 
-    def surface_energy(self, atoms=None, jid="x"):
+    def surface_energy(self, atoms=None, jid="x", cell_relax=False, id=None):
         spg = Spacegroup3D(atoms=atoms)
         cvn = spg.conventional_standard_structure
         mills = symmetrically_distinct_miller_indices(
             max_index=self.max_miller_index, cvn_atoms=cvn
         )
         bulk_enp = (
-            self.get_energy(atoms=cvn, cell_relax=True, constant_volume=False)[
-                0
-            ]
+            self.get_energy(
+                atoms=cvn, cell_relax=cell_relax, constant_volume=False
+            )[0]
             / cvn.num_atoms
         )
         surface_results = []
@@ -145,7 +182,9 @@ class Evaluator(object):
                 16
                 * (
                     self.get_energy(
-                        atoms=surf, cell_relax=True, constant_volume=False
+                        atoms=surf,
+                        cell_relax=cell_relax,
+                        constant_volume=False,
                     )[0]
                     - bulk_enp * surf.num_atoms
                 )
@@ -158,14 +197,20 @@ class Evaluator(object):
             surface_results.append(info)
         return surface_results
 
-    def vacancy_energy(self, atoms=None, jid="x"):
+    def vacancy_energy(
+        self,
+        atoms=None,
+        jid="x",
+        cell_relax=False,
+        id=None,
+    ):
         chem_pot = get_optb88vdw_energy()
         strts = Vacancy(atoms).generate_defects(
             on_conventional_cell=True, enforce_c_size=10, extend=1
         )
         bulk_enp = (
             self.get_energy(
-                atoms=atoms, cell_relax=True, constant_volume=False
+                atoms=atoms, cell_relax=cell_relax, constant_volume=False
             )[0]
             / atoms.num_atoms
         )
@@ -183,6 +228,7 @@ class Evaluator(object):
                 + "_"
                 + j.to_dict()["wyckoff_multiplicity"]
             )
+
             if j.to_dict()["symbol"] in self.chem_pot_ref:
                 atoms_en = self.chem_pot_ref[j.to_dict()["symbol"]]
             else:
@@ -193,14 +239,14 @@ class Evaluator(object):
                 atoms_en = (
                     self.get_energy(
                         atoms=atoms_elemental,
-                        cell_relax=True,
+                        cell_relax=cell_relax,
                         constant_volume=False,
                     )[0]
                 ) / atoms_elemental.num_atoms
                 self.chem_pot_ref[j.to_dict()["symbol"]] = atoms_en
             defect_en = (
                 self.get_energy(
-                    atoms=strt, cell_relax=True, constant_volume=False
+                    atoms=strt, cell_relax=cell_relax, constant_volume=False
                 )[0]
                 - bulk_enp * strt.num_atoms
                 + atoms_en
@@ -213,16 +259,17 @@ class Evaluator(object):
         return vacancy_results
 
     def phonons(
+        self,
         atoms=None,
-        dim=[5, 5, 5],
+        dim=[2, 2, 2],
         freq_conversion_factor=33.3566830,  # Thz to cm-1
-        phonopy_bands_figname="phonopy_bands.png",
         write_fc=False,
         min_freq_tol=-0.05,
         distance=0.2,
+        id=None,
     ):
         """Make Phonon calculation setup."""
-        if atoms is None or calculator is None:
+        if atoms is None or self.calculator is None:
             raise ValueError("Atoms and calculator must be provided")
 
         kpoints = Kpoints().kpath(atoms, line_density=5)
@@ -308,8 +355,11 @@ class Evaluator(object):
         )  # converting from kJ/mol to eV
         phonon.run_total_dos()
         tdos = phonon._total_dos
-        freqs, ds = tdos.get_dos()
+        # freqs, ds = tdos.get_dos()
+        freqs = tdos.frequency_points
+        ds = tdos.dos
         freqs = np.array(freqs)
+
         freqs = freqs * freq_conversion_factor
         min_freq = min_freq_tol * freq_conversion_factor
         max_freq = max(freqs)
@@ -325,17 +375,15 @@ class Evaluator(object):
         plt.ylim([min_freq, max_freq])
         plt.xlim([0, max(ds)])
         plt.tight_layout()
+        nm = id + "_phonon.png"
+        phonopy_bands_figname = os.path.join(self.output_dir, nm)
         plt.savefig(phonopy_bands_figname)
         plt.show()
         plt.close()
 
         return zpe, phonon
 
-    def ev_curve(
-        self,
-        atoms=None,
-        dx=np.arange(-0.05, 0.05, 0.01),
-    ):
+    def ev_curve(self, atoms=None, dx=np.arange(-0.05, 0.05, 0.005), id=None):
         """Get EV curve."""
 
         y = []
@@ -349,19 +397,75 @@ class Evaluator(object):
             vol.append(s1.volume)
         x = np.array(dx)
         y = np.array(y)
-        eos = EquationOfState(vol, y, eos="murnaghan")
-        v0, e0, B = eos.fit()
-        kv = B / kJ * 1.0e24  # , 'GPa')
+        kv = 'na'
+        try:
+         eos = EquationOfState(vol, y, eos="murnaghan")
+         v0, e0, B = eos.fit()
+         kv = B / kJ * 1.0e24  # , 'GPa')
+        except:
+           pass
         # print("Energies:", y)
         # print("Volumes:", vol)
+        nm = id + "_eV.png"
+        plt.plot(vol, y, "-o")
+        fname = self.output_dir + "/" + nm
+        plt.savefig(fname)
+        plt.close()
+
         return kv
 
 
 if __name__ == "__main__":
-    atoms = Atoms.from_poscar("POSCAR").to_dict()
-    # get_jid_data(jid="JVASP-816", dataset="dft_3d")
-    ev = Evaluator(
-        atoms_dataset=[{"jid": "JVASP-816", "atoms": atoms}],
-        calculator_type="emt",
-    )
-    ev.run_all()
+    jids_check = [
+        "JVASP-1002",  # Si
+        "JVASP-816",  # Al
+        "JVASP-867",  # Cu
+        "JVASP-1029",  # Ti
+        "JVASP-861",  # Cr
+        "JVASP-30",  # GaN Pg3mmc
+        "JVASP-8169",  # GaN F-43m
+        "JVASP-890",  # Ge
+        "JVASP-8158",  # SiC F-43m
+        "JVASP-8118",  # SiC P6_3mmc
+        "JVASP-107",  # SiC P6_3mc
+        "JVASP-39",  # AlN P6_3mc
+        "JVASP-7844",  # AlN F-43m
+        "JVASP-35106",  # Al3GaN4 P-43m
+        "JVASP-1174",  # GaAs F-43m
+        "JVASP-1372",  # AlAs F-43m
+        "JVASP-91",  # C Fd-3m
+        "JVASP-1186",  # InAs F-43M
+        "JVASP-1408",  # AlSb F-43M
+        "JVASP-105410",  # SiGe F-43m
+        "JVASP-1177",  # GaSb F-43m
+        "JVASP-79204",  # BN P63mc
+        "JVASP-1393",  # GaP F-43m
+        "JVASP-1312",  # BP F-43m
+        "JVASP-1327",  # AlP F-43m
+        "JVASP-1183",  # InP F-43m
+        "JVASP-1192",  # CdSe F-43m
+        "JVASP-8003",  # CdS F-43m
+        "JVASP-96",  # ZnSe F-43m
+        "JVASP-1198",  # ZnTe F-43m
+        "JVASP-1195",  # ZnO P63mc
+        "JVASP-9147",  # HfO2 P21c
+        "JVASP-41",  # SiO2 P3_221
+        "JVASP-34674",  # SiO2 C222_1
+        "JVASP-113",  # ZrO2 P2_1c
+        "JVASP-32",  # Al2O3 R-3c
+    ]
+    for i in jids_check:
+        print(i)
+        # atoms = Atoms.from_poscar("POSCAR").to_dict()
+        atoms = (get_jid_data(jid=i, dataset="dft_3d")['atoms'])
+        ev = Evaluator(
+            atoms_dataset=[{"atoms": atoms, "jid": i}],
+            # calculator_type="CHGNet",
+            calculator_type="ALIGNN-FF",
+            # calculator_type="emt",
+            # alignn_model_path = None
+            #alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111b",
+            #alignn_model_path = "/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111e/"
+            alignn_model_path = "/wrk/knc6/AFFBench/fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111a"
+        )
+        ev.run_all()
