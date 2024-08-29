@@ -12,6 +12,7 @@ from jarvis.analysis.structure.spacegroup import (
     Spacegroup3D,
     symmetrically_distinct_miller_indices,
 )
+from jarvis.db.jsonutils import dumpjson
 from jarvis.analysis.defects.surface import Surface
 from jarvis.analysis.defects.vacancy import Vacancy
 from jarvis.analysis.thermodynamics.energetics import get_optb88vdw_energy
@@ -22,9 +23,22 @@ from phonopy.file_IO import (
     write_FORCE_CONSTANTS,
 )
 import os
+import time
 import matplotlib.pyplot as plt
 from ase import Atoms as AseAtoms
 from collections import defaultdict
+import glob
+from jarvis.db.jsonutils import loadjson
+from sklearn.metrics import mean_absolute_error
+import pandas as pd
+
+dft_3d = data("dft_3d")
+
+
+def get_entry(jid):
+    for i in dft_3d:
+        if i["jid"] == jid:
+            return i
 
 
 class Evaluator(object):
@@ -33,7 +47,7 @@ class Evaluator(object):
         atoms_dataset=None,
         calculator_type="",
         calculator=None,
-        fmax=0.05,
+        fmax=0.03,
         nsteps=200,
         max_miller_index=1,
         id_tag="jid",
@@ -65,6 +79,8 @@ class Evaluator(object):
             chem_pot_ref = defaultdict()
         self.chem_pot_ref = chem_pot_ref
         self.output_dir = output_dir
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
 
     # TODO: import from intermat
     # https://github.com/usnistgov/intermat/blob/main/intermat/calculators.py
@@ -92,8 +108,8 @@ class Evaluator(object):
                 # path=model_path, stress_wt=0.3, model_filename='best_model.pt',force_mult_natoms=False
                 path=model_path,
                 stress_wt=0.3,
-                model_filename="current_model.pt",
-                force_mult_natoms=False,
+                model_filename="best_model.pt",
+                force_mult_natoms=True,
             )
         elif self.calculator_type == "CHGNet":
             from chgnet.model.dynamics import CHGNetCalculator
@@ -107,8 +123,14 @@ class Evaluator(object):
             raise ValueError("Unsupported calculator type")
 
     def get_energy(
-        self, atoms=None, cell_relax=True, constant_volume=False, id=None
+        self,
+        atoms=None,
+        cell_relax=True,
+        constant_volume=False,
+        id=None,
+        entry=None,
     ):
+        t1 = time.time()
         ase_atoms = atoms.ase_converter()
         ase_atoms.calc = self.calculator
         if not cell_relax:
@@ -120,23 +142,196 @@ class Evaluator(object):
         dyn.run(fmax=self.fmax, steps=self.nsteps)
         en = ase_atoms.atoms.get_potential_energy()
         final_atoms = ase_to_atoms(ase_atoms.atoms)
-        return en, final_atoms
+        t2 = time.time()
+        info = {}
+        initial_abc = atoms.lattice.abc
+        info["initial_a"] = initial_abc[0]
+        info["initial_b"] = initial_abc[1]
+        info["initial_c"] = initial_abc[2]
+        info["initial_vol"] = atoms.volume
+        final_abc = final_atoms.lattice.abc
+
+        info["final_a"] = final_abc[0]
+        info["final_b"] = final_abc[1]
+        info["final_c"] = final_abc[2]
+        info["final_vol"] = final_atoms.volume
+        print("latt a", initial_abc[0], final_abc[0])
+        print("latt b", initial_abc[1], final_abc[1])
+        print("latt c", initial_abc[2], final_abc[2])
+        info["energy"] = en
+        # if id is not None:
+        #    name = id + "_energy.json"
+        #    fname = os.path.join(self.output_dir, name)
+        #    dumpjson(data=info, filename=fname)
+        return en, final_atoms, info
+
+    def get_formation_energy(
+        self,
+        atoms=None,
+        id=None,
+        energy=None,
+        cell_relax=True,
+        entry=None,
+        entry_key="formation_energy_peratom",
+    ):
+
+        if energy is None:
+            energy, optim_atoms = self.get_energy(atoms=atoms, id=id)
+
+        chem_pot = get_optb88vdw_energy()
+
+        ase_atoms = atoms.ase_converter()
+        form_energy = energy
+        for i, j in atoms.composition.to_dict().items():
+
+            if i in self.chem_pot_ref:
+                atoms_en = self.chem_pot_ref[i]
+            else:
+                jid_elemental = chem_pot[i]["jid"]
+                atoms_elemental = Atoms.from_dict(
+                    get_entry(jid_elemental)["atoms"]
+                )
+                #    get_jid_data(jid=jid_elemental, dataset="dft_3d")["atoms"]
+                # )
+                atoms_en = (
+                    self.get_energy(
+                        atoms=atoms_elemental,
+                        cell_relax=cell_relax,
+                        constant_volume=False,
+                    )[0]
+                ) / atoms_elemental.num_atoms
+                self.chem_pot_ref[i] = atoms_en
+                # print('i,j,en',i,j,atoms_en)
+                form_energy = form_energy - atoms_en * j
+        form_energy = form_energy / atoms.num_atoms
+        form_energy_entry = ""
+        if entry is not None and entry_key in entry:
+            form_energy_entry = entry[entry_key]
+        info = {}
+        info["form_energy"] = form_energy
+        info["form_energy_entry"] = form_energy_entry
+        print("form_energy", form_energy, form_energy_entry)
+        # name = id + "_form_energy.json"
+        # fname = os.path.join(self.output_dir, name)
+        # dumpjson(data=info, filename=fname)
+        return info
 
     def run_all(self):
+        initial_a = []
+        initial_b = []
+        initial_c = []
+        initial_vol = []
+        final_a = []
+        final_b = []
+        final_c = []
+        final_vol = []
+        form_en = []
+        form_en_entry = []
+        c11 = []
+        c11_entry = []
+        c44 = []
+        c44_entry = []
+        kv = []
+        kv_entry = []
+        all_dat = {}
+        ids = []
+        timings = []
         for i in self.atoms_dataset:
+            t1 = time.time()
+            tmp = {}
             id = i[self.id_tag]
+            ids.append(id)
+            if "entry" in i:
+                entry = i["entry"]
             atoms = Atoms.from_dict(i["atoms"])
+            print("id", id)
             print("atoms", atoms)
-            energy, optim_atoms = self.get_energy(atoms=atoms, id=id)
+            energy, optim_atoms, info = self.get_energy(
+                atoms=atoms, id=id, entry=entry
+            )
+            tmp["energy"] = info
             print("final atoms", optim_atoms)
-            elastic_tensor = self.elastic_tensor(atoms=optim_atoms, id=id)
-            kv = self.ev_curve(atoms=optim_atoms, id=id)
-            surface_energy = self.surface_energy(atoms=optim_atoms, id=id)
-            vacancy_energy = self.vacancy_energy(atoms=optim_atoms, id=id)
-            print("energy, kv,elastic_tensor", energy, kv, elastic_tensor)
-            self.phonons(atoms=optim_atoms, id=id)
+            fen = self.get_formation_energy(
+                atoms=optim_atoms, energy=energy, id=id, entry=entry
+            )
+            tmp["form_en"] = fen
+            # print('form_en',form_en)
+            elastic_tensor = self.elastic_tensor(
+                atoms=optim_atoms, id=id, entry=entry
+            )
+            tmp["elastic_tensor"] = elastic_tensor
+            modulus = self.ev_curve(atoms=optim_atoms, id=id, entry=entry)
+            tmp["modulus"] = modulus
+            # surface_energy = self.surface_energy(atoms=optim_atoms, id=id)
+            # tmp['surface_energy']=surface_energy
+            # vacancy_energy = self.vacancy_energy(atoms=optim_atoms, id=id)
+            # tmp['vacancy_energy']=vacancy_energy
+            phon = self.phonons(atoms=optim_atoms, id=id)
+            # tmp['phon']=phon
+            name = id + "_dat.json"
+            fname = os.path.join(self.output_dir, name)
+            dumpjson(data=tmp, filename=fname)
+            d = tmp
+            initial_a.append(d["energy"]["initial_a"])
+            final_a.append(d["energy"]["final_a"])
+            initial_b.append(d["energy"]["initial_b"])
+            final_b.append(d["energy"]["final_b"])
+            initial_c.append(d["energy"]["initial_c"])
+            final_c.append(d["energy"]["final_c"])
+            initial_vol.append(d["energy"]["initial_vol"])
+            final_vol.append(d["energy"]["final_vol"])
+            c11.append(d["elastic_tensor"]["c11"])
+            c11_entry.append(d["elastic_tensor"]["c11_entry"])
+            c44.append(d["elastic_tensor"]["c44"])
+            c44_entry.append(d["elastic_tensor"]["c44_entry"])
+            kv.append(d["modulus"]["kv"])
+            form_en.append(d["form_en"]["form_energy"])
+            form_en_entry.append(d["form_en"]["form_energy_entry"])
+            kv_entry.append(d["modulus"]["kv_entry"])
+            t2 = time.time()
+            timings.append(t2 - t1)
+            print("time", t2 - t1)
+        all_dat = {}
+        all_dat["ids"] = ids
+        all_dat["initial_a"] = initial_a
+        all_dat["initial_b"] = initial_b
+        all_dat["initial_c"] = initial_c
+        all_dat["final_a"] = final_a
+        all_dat["final_b"] = final_b
+        all_dat["final_c"] = final_c
+        all_dat["initial_vol"] = initial_vol
+        all_dat["final_vol"] = final_vol
+        all_dat["c11"] = c11
+        all_dat["c11_entry"] = c11_entry
+        all_dat["c44"] = c44
+        all_dat["c44_entry"] = c44_entry
+        all_dat["kv"] = kv
+        all_dat["kv_entry"] = kv_entry
+        all_dat["form_en"] = form_en
+        all_dat["form_en_entry"] = form_en_entry
+        all_dat["timings"] = timings
+        err_a = mean_absolute_error(initial_a, final_a)
+        err_b = mean_absolute_error(initial_b, final_b)
+        err_c = mean_absolute_error(initial_c, final_c)
+        err_vol = mean_absolute_error(initial_vol, final_vol)
+        err_c11 = mean_absolute_error(c11_entry, c11)
+        err_c44 = mean_absolute_error(c44_entry, c44)
+        err_kv = mean_absolute_error(kv_entry, kv)
+        df = pd.DataFrame(all_dat)
+        fname = os.path.join(self.output_dir, "dat.csv")
+        df.to_csv(fname, index=False)
+        print("a", err_a)
+        print("b", err_b)
+        print("c", err_c)
+        print("vol", err_vol)
+        print("c11", err_c11)
+        print("c44", err_c44)
+        print("kv", err_kv)
+        return all_dat
 
-    def elastic_tensor(self, atoms=None, id=None):
+    def elastic_tensor(
+        self, atoms=None, id=None, entry=None, entry_key="elastic_tensor"
+    ):
         from elastic import get_elementary_deformations, get_elastic_tensor
         import elastic
 
@@ -146,11 +341,30 @@ class Evaluator(object):
         cij_order = elastic.elastic.get_cij_order(ase_atoms)
         Cij, Bij = get_elastic_tensor(ase_atoms, systems)
         c11 = ""
+        c44 = ""
+        c11_entry = ""
+        c44_entry = ""
+        info = {}
         for i, j in zip(cij_order, Cij):
-            print(i, j / ase.units.GPa)
+            # print(i, j / ase.units.GPa)
             if i == "C_11":
                 c11 = j / ase.units.GPa
-        return c11
+            if i == "C_44":
+                c44 = j / ase.units.GPa
+        if entry is not None and entry_key in entry:
+            et = entry[entry_key]
+            c11_entry = et[0][0]
+            c44_entry = et[3][3]
+        info["c11"] = c11
+        info["c44"] = c44
+        info["c11_entry"] = c11_entry
+        info["c44_entry"] = c44_entry
+        print("C11", c11, c11_entry)
+        print("C44", c44, c44_entry)
+        # name = id + "_elast.json"
+        # fname = os.path.join(self.output_dir, name)
+        # dumpjson(data=info, filename=fname)
+        return info
 
     def surface_energy(self, atoms=None, jid="x", cell_relax=False, id=None):
         spg = Spacegroup3D(atoms=atoms)
@@ -186,7 +400,7 @@ class Evaluator(object):
                         cell_relax=cell_relax,
                         constant_volume=False,
                     )[0]
-                    - bulk_enp * surf.num_atoms
+                    - bulk_enp * (surf.num_atoms)
                 )
                 / (2 * area)
             )
@@ -195,6 +409,9 @@ class Evaluator(object):
             info["surf_en"] = surf_en
             print(name, surf_en)
             surface_results.append(info)
+        # name = id + "_surf.json"
+        # fname = os.path.join(self.output_dir, name)
+        # dumpjson(data=info, filename=fname)
         return surface_results
 
     def vacancy_energy(
@@ -234,8 +451,11 @@ class Evaluator(object):
             else:
                 jid_elemental = chem_pot[j.to_dict()["symbol"]]["jid"]
                 atoms_elemental = Atoms.from_dict(
-                    get_jid_data(jid=jid_elemental, dataset="dft_3d")["atoms"]
+                    get_entry(jid_elemental)["atoms"]
                 )
+                # atoms_elemental = Atoms.from_dict(
+                #    get_jid_data(jid=jid_elemental, dataset="dft_3d")["atoms"]
+                # )
                 atoms_en = (
                     self.get_energy(
                         atoms=atoms_elemental,
@@ -248,7 +468,7 @@ class Evaluator(object):
                 self.get_energy(
                     atoms=strt, cell_relax=cell_relax, constant_volume=False
                 )[0]
-                - bulk_enp * strt.num_atoms
+                - bulk_enp * (strt.num_atoms + 1)
                 + atoms_en
             )
             info = {}
@@ -256,6 +476,9 @@ class Evaluator(object):
             info["defect_en"] = defect_en
             print(name, defect_en)
             vacancy_results.append(info)
+        # name = id + "_vac.json"
+        # fname = os.path.join(self.output_dir, name)
+        # dumpjson(data=info, filename=fname)
         return vacancy_results
 
     def phonons(
@@ -267,6 +490,7 @@ class Evaluator(object):
         min_freq_tol=-0.05,
         distance=0.2,
         id=None,
+        force_mult_natoms=True,
     ):
         """Make Phonon calculation setup."""
         if atoms is None or self.calculator is None:
@@ -288,7 +512,10 @@ class Evaluator(object):
                 pbc=True,
             )
             ase_atoms.calc = self.calculator
+
             forces = np.array(ase_atoms.get_forces())
+            # if force_mult_natoms:
+            #    forces*=len(ase_atoms)
             drift_force = forces.sum(axis=0)
             for force in forces:
                 force -= drift_force / forces.shape[0]
@@ -375,17 +602,28 @@ class Evaluator(object):
         plt.ylim([min_freq, max_freq])
         plt.xlim([0, max(ds)])
         plt.tight_layout()
-        nm = id + "_phonon.png"
+        nm = id + "_" + atoms.composition.reduced_formula + "_phonon.png"
         phonopy_bands_figname = os.path.join(self.output_dir, nm)
         plt.savefig(phonopy_bands_figname)
         plt.show()
         plt.close()
+        # name = id + "_phon.json"
+        # fname = os.path.join(self.output_dir, name)
+        # dumpjson(data=[zpe], filename=fname)
 
-        return zpe, phonon
+        return zpe
 
-    def ev_curve(self, atoms=None, dx=np.arange(-0.05, 0.05, 0.005), id=None):
+    def ev_curve(
+        self,
+        atoms=None,
+        dx=np.arange(-0.02, 0.02, 0.001),
+        # dx=np.arange(-0.05, 0.05, 0.005),
+        id=None,
+        entry=None,
+        entry_key="bulk_modulus_kv",
+    ):
         """Get EV curve."""
-
+        atoms = atoms.get_conventional_atoms.make_supercell([2, 2, 2])
         y = []
         vol = []
         for i in dx:
@@ -397,26 +635,37 @@ class Evaluator(object):
             vol.append(s1.volume)
         x = np.array(dx)
         y = np.array(y)
-        kv = 'na'
+        kv = "na"
         try:
-         eos = EquationOfState(vol, y, eos="murnaghan")
-         v0, e0, B = eos.fit()
-         kv = B / kJ * 1.0e24  # , 'GPa')
+            eos = EquationOfState(vol, y, eos="murnaghan")
+            v0, e0, B = eos.fit()
+            kv = B / kJ * 1.0e24  # , 'GPa')
         except:
-           pass
+            pass
         # print("Energies:", y)
         # print("Volumes:", vol)
-        nm = id + "_eV.png"
+        nm = id + "_" + atoms.composition.reduced_formula + "_eV.png"
         plt.plot(vol, y, "-o")
         fname = self.output_dir + "/" + nm
         plt.savefig(fname)
         plt.close()
+        # name = id + "_ev.json"
+        # fname = os.path.join(self.output_dir, name)
+        # dumpjson(data=[kv], filename=fname)
+        info = {}
+        kv_entry = ""
+        if entry is not None:
+            kv_entry = entry[entry_key]
+        info["kv"] = kv
+        info["kv_entry"] = kv_entry
+        print("Kv", kv, kv_entry)
 
-        return kv
+        return info
 
 
 if __name__ == "__main__":
     jids_check = [
+        "JVASP-8158",  # SiC F-43m
         "JVASP-1002",  # Si
         "JVASP-816",  # Al
         "JVASP-867",  # Cu
@@ -425,7 +674,6 @@ if __name__ == "__main__":
         "JVASP-30",  # GaN Pg3mmc
         "JVASP-8169",  # GaN F-43m
         "JVASP-890",  # Ge
-        "JVASP-8158",  # SiC F-43m
         "JVASP-8118",  # SiC P6_3mmc
         "JVASP-107",  # SiC P6_3mc
         "JVASP-39",  # AlN P6_3mc
@@ -454,18 +702,122 @@ if __name__ == "__main__":
         "JVASP-113",  # ZrO2 P2_1c
         "JVASP-32",  # Al2O3 R-3c
     ]
+    jids_check = [
+        "JVASP-1002",
+        "JVASP-9147",
+        "JVASP-1312",
+        "JVASP-802",
+        "JVASP-816",
+        "JVASP-919",
+        "JVASP-1195",
+        "JVASP-1393",
+        "JVASP-113",
+        "JVASP-7630",
+        "JVASP-1174",
+        "JVASP-969",
+        "JVASP-34674",
+        "JVASP-993",
+        "JVASP-890",
+        "JVASP-79204",
+        "JVASP-934",
+        "JVASP-8169",
+        "JVASP-1183",
+        "JVASP-1327",
+        "JVASP-895",
+        "JVASP-861",
+        "JVASP-1177",
+        "JVASP-21195",
+        "JVASP-14812",
+        "JVASP-35106",
+        "JVASP-943",
+        "JVASP-32",
+        "JVASP-1372",
+        "JVASP-1192",
+        "JVASP-41",
+        "JVASP-958",
+        "JVASP-963",
+        "JVASP-981",
+        "JVASP-828",
+        "JVASP-1180",
+        "JVASP-7762",
+        "JVASP-8158",
+        "JVASP-1702",
+        "JVASP-23",
+        "JVASP-840",
+        "JVASP-972",
+        "JVASP-95",
+        "JVASP-30",
+        "JVASP-1198",
+        "JVASP-7844",
+        "JVASP-91",
+        "JVASP-8118",
+        "JVASP-14837",
+        "JVASP-8003",
+        "JVASP-858",
+        "JVASP-837",
+        "JVASP-105410",
+        "JVASP-931",
+        "JVASP-1201",
+        "JVASP-819",
+        "JVASP-1186",
+        "JVASP-96",
+        "JVASP-1029",
+        "JVASP-107",
+        "JVASP-825",
+        "JVASP-1408",
+        "JVASP-810",
+        "JVASP-1189",
+        "JVASP-867",
+        "JVASP-901",
+        "JVASP-39",
+        "JVASP-984",
+        "JVASP-966",
+    ]
+    # print("energy, kv,elastic_tensor", energy, kv, elastic_tensor)
+    jids_check = [
+        "JVASP-1002",
+        "JVASP-816",
+        "JVASP-867",
+        "JVASP-1174",
+        "JVASP-1327",
+        "JVASP-8003",
+        "JVASP-1372",
+        "JVASP-1192",
+        "JVASP-1198",
+        "JVASP-1408",
+        "JVASP-1186",
+        "JVASP-96",
+        "JVASP-1183",
+        "JVASP-8118",
+        "JVASP-30",
+        "JVASP-39",
+        "JVASP-1195",
+        "JVASP-1180",
+    ]
+    jids_check = [
+        "JVASP-1002",
+        "JVASP-816",
+    ]
+    atoms_dataset = []
     for i in jids_check:
         print(i)
         # atoms = Atoms.from_poscar("POSCAR").to_dict()
-        atoms = (get_jid_data(jid=i, dataset="dft_3d")['atoms'])
-        ev = Evaluator(
-            atoms_dataset=[{"atoms": atoms, "jid": i}],
-            # calculator_type="CHGNet",
-            calculator_type="ALIGNN-FF",
-            # calculator_type="emt",
-            # alignn_model_path = None
-            #alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111b",
-            #alignn_model_path = "/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111e/"
-            alignn_model_path = "/wrk/knc6/AFFBench/fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111a"
-        )
-        ev.run_all()
+        entry = get_entry(i)  # get_jid_data(jid=i, dataset="dft_3d")
+        atoms = entry["atoms"]
+        atoms_dataset.append({"atoms": atoms, "jid": i, "entry": entry})
+    ev = Evaluator(
+        atoms_dataset=atoms_dataset,
+        # atoms_dataset=[{"atoms": atoms, "jid": i, "entry": entry}],
+        # output_dir="out_mp",
+        output_dir="out_fd",
+        # calculator_type="CHGNet",
+        calculator_type="ALIGNN-FF",
+        # calculator_type="emt",
+        # alignn_model_path = None
+        # alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111a",
+        # alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111b",
+        # alignn_model_path = "/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111e/"
+        alignn_model_path="/wrk/knc6/Software/alignn_cutoff_parallel/alignn/alignn/ff/v8.29.2024_dft_3d",
+        # alignn_model_path="/wrk/knc6/AFFBench/fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111b",
+    )
+    ev.run_all()
