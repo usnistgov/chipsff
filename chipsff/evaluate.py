@@ -849,3 +849,9 @@ if __name__ == "__main__":
         [all_dat_matgl, all_dat_v5_27_2024], index=["matgl", "v5_27_2024"]
     )
     print(df)
+    import plotly.express as px
+
+
+    fig = px.imshow(df, text_auto=True)
+    #fig.show()
+    fig.write_html("error.html")
