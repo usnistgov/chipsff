@@ -32,35 +32,45 @@ import glob
 from jarvis.db.jsonutils import loadjson
 from sklearn.metrics import mean_absolute_error
 import pandas as pd
+
+
 dft_3d = data("dft_3d")
-#x = data("dft_3d")
+# x = data("dft_3d")
 y = data("vacancydb")
-surf_url = 'https://figshare.com/ndownloader/files/46355689'
-z = get_request_data(js_tag='surface_db_dd.json',url=surf_url)
+surf_url = "https://figshare.com/ndownloader/files/46355689"
+z = get_request_data(js_tag="surface_db_dd.json", url=surf_url)
 defect_ids = list(set([i["jid"] for i in y]))
-surf_ids = list(set([i["name"].split('Surface-')[1].split('_miller_')[0] for i in z]))
+# surf_ids = list(set([("_".join(i["name"].split('Surface-')[1].split("_"))) for i in z]))
+surf_ids = list(
+    set([i["name"].split("Surface-")[1].split("_miller_")[0] for i in z])
+)
 mem = []
 for i in dft_3d:
-    tmp=i
-    tmp["vacancy"]={}
-    tmp["surface"]={}
+    tmp = i
+    tmp["vacancy"] = {}
+    tmp["surface"] = {}
     if i["jid"] in defect_ids:
-            for j in y:
-                #if j["jid"] == "JVASP-1174":
-                #    print(j["jid"],j['ef'])
-                if i["jid"] == j["jid"]:
-                    #print(j['jid'])
-                    tmp["vacancy"].setdefault(j["id"], j["ef"])
+        for j in y:
+            if i["jid"] == j["jid"]:
+                tmp["vacancy"].setdefault(
+                    j["id"].split("_")[0] + "_" + j["id"].split("_")[1],
+                    j["ef"],
+                )
+                # tmp["vacancy"].setdefault(j["id"], j["ef"])
+                # Ignoring wyckoff notation
     if i["jid"] in surf_ids:
-       for k in z:
-           jid=k["name"].split('Surface-')[1].split('_miller_')[0]
-           if i["jid"] == jid:
-              tmp['surface'].setdefault(k["name"], k["surf_en"])
+        for k in z:
+            jid = k["name"].split("Surface-")[1].split("_miller_")[0]
+            if i["jid"] == jid:
+                # tmp['surface'].setdefault("_".join(k["name"].split('_')[0:5]), k["surf_en"])
+                tmp["surface"].setdefault(
+                    "_".join(k["name"].split("_thickness")[0].split("_")[0:5]),
+                    k["surf_en"],
+                )
 
     mem.append(tmp)
 
 dft_3d = mem
-
 
 
 def get_entry(jid):
@@ -128,19 +138,16 @@ class Evaluator(object):
 
             # modl_path = "/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp/out111continue5"
             # model_path = "aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111"
-            # model_path = "/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111a"
-            # model_path = "/wrk/knc6/AFFBench/fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111"
             if self.alignn_model_path is None:
 
                 model_path = default_path()
             else:
                 model_path = self.alignn_model_path
             return AlignnAtomwiseCalculator(
-                # path=model_path, stress_wt=0.3, model_filename='best_model.pt',force_mult_natoms=False
                 path=model_path,
                 stress_wt=0.3,
                 model_filename="current_model.pt",
-                #model_filename="best_model.pt",
+                # model_filename="best_model.pt",
                 force_mult_natoms=True,
             )
         elif self.calculator_type == "CHGNet":
@@ -266,6 +273,10 @@ class Evaluator(object):
         c44_entry = []
         kv = []
         kv_entry = []
+        surf_en = []
+        surf_en_entry = []
+        vac_en = []
+        vac_en_entry = []
         all_dat = {}
         ids = []
         timings = []
@@ -295,10 +306,22 @@ class Evaluator(object):
             tmp["elastic_tensor"] = elastic_tensor
             modulus = self.ev_curve(atoms=optim_atoms, id=id, entry=entry)
             tmp["modulus"] = modulus
-            surface_energy = self.surface_energy(atoms=optim_atoms, id=id, entry=entry)
-            tmp['surface_energy']=surface_energy
-            vacancy_energy = self.vacancy_energy(atoms=optim_atoms, id=id, entry=entry)
-            tmp['vacancy_energy']=vacancy_energy
+            surface_energy = self.surface_energy(
+                atoms=optim_atoms, id=id, entry=entry
+            )
+            for ii in surface_energy:
+                if ii["surf_en_entry"] != "":
+                    surf_en_entry.append(ii["surf_en_entry"])
+                    surf_en.append(ii["surf_en"])
+            tmp["surface_energy"] = surface_energy
+            vacancy_energy = self.vacancy_energy(
+                atoms=optim_atoms, id=id, entry=entry
+            )
+            for ii in vacancy_energy:
+                if ii["vac_en_entry"] != "":
+                    vac_en_entry.append(ii["vac_en_entry"])
+                    vac_en.append(ii["vac_en"])
+            tmp["vacancy_energy"] = vacancy_energy
             if do_phonon:
                 print("Running phonon")
                 phon = self.phonons(atoms=optim_atoms, id=id)
@@ -315,14 +338,18 @@ class Evaluator(object):
             final_c.append(d["energy"]["final_c"])
             initial_vol.append(d["energy"]["initial_vol"])
             final_vol.append(d["energy"]["final_vol"])
-            c11.append(d["elastic_tensor"]["c11"])
-            c11_entry.append(d["elastic_tensor"]["c11_entry"])
-            c44.append(d["elastic_tensor"]["c44"])
-            c44_entry.append(d["elastic_tensor"]["c44_entry"])
-            kv.append(d["modulus"]["kv"])
-            form_en.append(d["form_en"]["form_energy"])
-            form_en_entry.append(d["form_en"]["form_energy_entry"])
-            kv_entry.append(d["modulus"]["kv_entry"])
+            if d["elastic_tensor"]["c11_entry"] != "":
+                c11.append(d["elastic_tensor"]["c11"])
+                c11_entry.append(d["elastic_tensor"]["c11_entry"])
+            if d["elastic_tensor"]["c44_entry"] != "":
+                c44.append(d["elastic_tensor"]["c44"])
+                c44_entry.append(d["elastic_tensor"]["c44_entry"])
+            if d["modulus"]["kv_entry"] != "":
+                kv.append(d["modulus"]["kv"])
+                kv_entry.append(d["modulus"]["kv_entry"])
+            if d["form_en"]["form_energy_entry"] != "":
+                form_en.append(d["form_en"]["form_energy"])
+                form_en_entry.append(d["form_en"]["form_energy_entry"])
             t2 = time.time()
             timings.append(t2 - t1)
             print("time", t2 - t1)
@@ -344,25 +371,38 @@ class Evaluator(object):
         all_dat["kv_entry"] = kv_entry
         all_dat["form_en"] = form_en
         all_dat["form_en_entry"] = form_en_entry
+        all_dat["surf_en"] = ";".join(map(str, surf_en))
+        all_dat["surf_en_entry"] = ";".join(map(str, surf_en_entry))
+        all_dat["vac_en"] = ";".join(map(str, vac_en))
+        all_dat["vac_en_entry"] = ";".join(map(str, vac_en_entry))
         all_dat["timings"] = timings
         error_dat = {}
-
-        err_a = mean_absolute_error(initial_a, final_a)
-        err_b = mean_absolute_error(initial_b, final_b)
-        err_c = mean_absolute_error(initial_c, final_c)
-        err_fen = mean_absolute_error(form_en_entry, form_en)
-        err_vol = mean_absolute_error(initial_vol, final_vol)
-        err_c11 = mean_absolute_error(c11_entry, c11)
-        err_c44 = mean_absolute_error(c44_entry, c44)
+        if len(initial_a) > 0:
+            err_a = mean_absolute_error(initial_a, final_a)
+            err_b = mean_absolute_error(initial_b, final_b)
+            err_c = mean_absolute_error(initial_c, final_c)
+            err_fen = mean_absolute_error(form_en_entry, form_en)
+            err_vol = mean_absolute_error(initial_vol, final_vol)
+            error_dat["err_a"] = err_a
+            error_dat["err_b"] = err_b
+            error_dat["err_c"] = err_c
+            error_dat["err_form"] = err_fen
+            error_dat["err_vol"] = err_vol
+        if len(c11) > 0:
+            err_c11 = mean_absolute_error(c11_entry, c11)
+            err_c44 = mean_absolute_error(c44_entry, c44)
+            error_dat["err_c11"] = err_c11
+            error_dat["err_c44"] = err_c44
         # err_kv = mean_absolute_error(kv_entry, kv)
-        error_dat["err_a"] = err_a
-        error_dat["err_b"] = err_b
-        error_dat["err_c"] = err_c
-        error_dat["err_form"] = err_fen
-        error_dat["err_vol"] = err_vol
-        error_dat["err_c11"] = err_c11
-        error_dat["err_c44"] = err_c44
-        # error_dat['err_kv']=err_kv
+        if len(surf_en) > 0:
+            err_surf_en = mean_absolute_error(surf_en_entry, surf_en)
+            error_dat["err_surf_en"] = err_surf_en
+        if len(vac_en) > 0:
+            err_vac_en = mean_absolute_error(vac_en_entry, vac_en)
+            # error_dat['err_kv']=err_kv
+            error_dat["err_vac_en"] = err_vac_en
+        error_dat["time"] = np.sum(np.array(timings))
+        print("error_dat", error_dat)
         df = pd.DataFrame(all_dat)
         fname = os.path.join(self.output_dir, "dat.csv")
         df.to_csv(fname, index=False)
@@ -416,7 +456,15 @@ class Evaluator(object):
         # dumpjson(data=info, filename=fname)
         return info
 
-    def surface_energy(self, atoms=None, jid="x", cell_relax=False, id=None,entry=None,entry_key='surface'):
+    def surface_energy(
+        self,
+        atoms=None,
+        jid="x",
+        cell_relax=False,
+        id=None,
+        entry=None,
+        entry_key="surface",
+    ):
         spg = Spacegroup3D(atoms=atoms)
         cvn = spg.conventional_standard_structure
         mills = symmetrically_distinct_miller_indices(
@@ -434,9 +482,11 @@ class Evaluator(object):
                 atoms=cvn, indices=j, thickness=25, vacuum=15
             ).make_surface()
             name = (
-                str(jid)
+                "Surface-"
+                + str(id)
                 + "_"
-                + str(surf.composition.reduced_formula)
+                + str("miller")
+                # + str(surf.composition.reduced_formula)
                 + "_"
                 + str("_".join(map(str, j)))
             )
@@ -457,10 +507,17 @@ class Evaluator(object):
             info = {}
             info["name"] = name
             info["surf_en"] = surf_en
-            print(name, surf_en)
+            info["surf_en_entry"] = ""
+            if (
+                entry is not None
+                and entry_key in entry
+                and name in entry[entry_key]
+            ):
+                print("pred", name, surf_en, "val", entry[entry_key][name])
+                info["surf_en_entry"] = entry[entry_key][name]
             surface_results.append(info)
-        if entry is not None and entry_key in entry:
-            print('surface',entry_key,entry[entry_key])
+        # if entry is not None and entry_key in entry:
+        #    print('surface',entry_key,entry[entry_key])
         # name = id + "_surf.json"
         # fname = os.path.join(self.output_dir, name)
         # dumpjson(data=info, filename=fname)
@@ -473,7 +530,7 @@ class Evaluator(object):
         cell_relax=False,
         id=None,
         entry=None,
-        entry_key="vacancy"
+        entry_key="vacancy",
     ):
         chem_pot = get_optb88vdw_energy()
         strts = Vacancy(atoms).generate_defects(
@@ -490,14 +547,21 @@ class Evaluator(object):
             strt = Atoms.from_dict(
                 j.to_dict()["defect_structure"]
             ).center_around_origin()
+            print(
+                "id",
+                id,
+                "symbol",
+                j.to_dict()["symbol"],
+                "wyc",
+                j.to_dict()["wyckoff_multiplicity"],
+            )
             name = (
-                str(jid)
-                + "_"
-                + str(strt.composition.reduced_formula)
+                str(id)
                 + "_"
                 + j.to_dict()["symbol"]
-                + "_"
-                + j.to_dict()["wyckoff_multiplicity"]
+                # Ignoring wyckoff notation
+                # + "_"
+                # + j.to_dict()["wyckoff_multiplicity"].split("_")[0]
             )
 
             if j.to_dict()["symbol"] in self.chem_pot_ref:
@@ -527,11 +591,19 @@ class Evaluator(object):
             )
             info = {}
             info["name"] = name
-            info["defect_en"] = defect_en
+            info["vac_en"] = defect_en
+            info["vac_en_entry"] = ""
             print(name, defect_en)
+            if (
+                entry is not None
+                and entry_key in entry
+                and name in entry[entry_key]
+            ):
+                print("pred", name, defect_en, "val", entry[entry_key][name])
+                info["vac_en_entry"] = entry[entry_key][name]
             vacancy_results.append(info)
         if entry is not None and entry_key in entry:
-            print('vacancy',entry_key,entry[entry_key])
+            print("vacancy", entry_key, entry[entry_key])
         # name = id + "_vac.json"
         # fname = os.path.join(self.output_dir, name)
         # dumpjson(data=info, filename=fname)
@@ -722,12 +794,11 @@ class Evaluator(object):
 if __name__ == "__main__":
     jids_check = [
         "JVASP-1002",  # Si
-        #"JVASP-8169",  # GaN F-43m
-        #"JVASP-890",  # Ge
-        #"JVASP-1174",  # GaAs F-43m
-        #"JVASP-1372",  # AlAs F-43m
-        #"JVASP-1186",  # InAs F-43M
-
+        # "JVASP-1174",  # GaAs F-43m
+        # "JVASP-8169",  # GaN F-43m
+        # "JVASP-890",  # Ge
+        # "JVASP-1372",  # AlAs F-43m
+        # "JVASP-1186",  # InAs F-43M
         # "JVASP-8158", #SiC F-43m
         # "JVASP-7844", #AlN F-43m
         # "JVASP-35106", #Al3GaN4 P-43m
@@ -750,47 +821,31 @@ if __name__ == "__main__":
     atoms_dataset = []
     for i in jids_check:
         print(i)
-        # atoms = Atoms.from_poscar("POSCAR").to_dict()
-        entry = get_entry(i)  # get_jid_data(jid=i, dataset="dft_3d")
+        entry = get_entry(i)
         atoms = entry["atoms"]
         atoms_dataset.append({"atoms": atoms, "jid": i, "entry": entry})
-    matgl_time = 88.64634680747986
-    all_dat_matgl = {'err_a': 0.01238383333333326, 'err_b': 0.01238450000000002, 'err_c': 0.012383333333333413, 'err_form': 1.0237318702125549, 'err_vol': 0.406173692516757, 'err_c11': 34.22407778780076, 'err_c44': 47.3191621432697}
-    """
-    t1=time.time()
+    t1 = time.time()
     ev = Evaluator(
         atoms_dataset=atoms_dataset,
         output_dir="out_4",
         calculator_type="M3GNet",
-        #output_dir="out_cut4301k",
-        #calculator_type="ALIGNN-FF",
-        # alignn_model_path = "/wrk/knc6/Software/alignn_cutoff_parallel/alignn/alignn/ff/v8.29.2024_mpf"
-        #alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111e/",
-        #alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111",
     )
     all_dat_matgl, _ = ev.run_all()
-    t2=time.time()
-    matgl_time=t2-t1
-    """
-
-    t1=time.time()
+    t2 = time.time()
+    matgl_time = t2 - t1
+    t1 = time.time()
     ev = Evaluator(
         atoms_dataset=atoms_dataset,
-        #output_dir="out_4",
-        #calculator_type="M3GNet",
         output_dir="out_cut4301k",
         calculator_type="ALIGNN-FF",
-        # alignn_model_path = "/wrk/knc6/Software/alignn_cutoff_parallel/alignn/alignn/ff/v8.29.2024_mpf"
-        #alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111e/",
-        #alignn_model_path="fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111b/",
-        #alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111d",
         alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111a",
-        #alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111c",
-        #alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111d",
-        #alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111",
     )
     all_dat_v5_27_2024, _ = ev.run_all()
-    t2=time.time()
-    al_time=t2-t1
-    print("all_dat_v5_27_2024", all_dat_v5_27_2024,al_time)
-    print("all_dat_matgl", all_dat_matgl,matgl_time)
+    t2 = time.time()
+    al_time = t2 - t1
+    print("all_dat_v5_27_2024", all_dat_v5_27_2024)
+    print("all_dat_matgl", all_dat_matgl)
+    df = pd.DataFrame(
+        [all_dat_matgl, all_dat_v5_27_2024], index=["matgl", "v5_27_2024"]
+    )
+    print(df)
