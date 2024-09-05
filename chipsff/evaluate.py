@@ -1,9 +1,9 @@
-# https://arxiv.org/pdf/2407.09674
+# https://arxiv.crg/pdf/2407.09674
 import numpy as np
 from ase.optimize.fire import FIRE
 from ase.constraints import ExpCellFilter
 from jarvis.core.atoms import ase_to_atoms
-from jarvis.db.figshare import data, get_jid_data
+from jarvis.db.figshare import data, get_jid_data, get_request_data
 from ase.calculators.emt import EMT
 from jarvis.core.atoms import Atoms
 from ase.eos import EquationOfState
@@ -24,6 +24,7 @@ from phonopy.file_IO import (
 )
 import os
 import time
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 from ase import Atoms as AseAtoms
 from collections import defaultdict
@@ -31,8 +32,35 @@ import glob
 from jarvis.db.jsonutils import loadjson
 from sklearn.metrics import mean_absolute_error
 import pandas as pd
-
 dft_3d = data("dft_3d")
+#x = data("dft_3d")
+y = data("vacancydb")
+surf_url = 'https://figshare.com/ndownloader/files/46355689'
+z = get_request_data(js_tag='surface_db_dd.json',url=surf_url)
+defect_ids = list(set([i["jid"] for i in y]))
+surf_ids = list(set([i["name"].split('Surface-')[1].split('_miller_')[0] for i in z]))
+mem = []
+for i in dft_3d:
+    tmp=i
+    tmp["vacancy"]={}
+    tmp["surface"]={}
+    if i["jid"] in defect_ids:
+            for j in y:
+                #if j["jid"] == "JVASP-1174":
+                #    print(j["jid"],j['ef'])
+                if i["jid"] == j["jid"]:
+                    #print(j['jid'])
+                    tmp["vacancy"].setdefault(j["id"], j["ef"])
+    if i["jid"] in surf_ids:
+       for k in z:
+           jid=k["name"].split('Surface-')[1].split('_miller_')[0]
+           if i["jid"] == jid:
+              tmp['surface'].setdefault(k["name"], k["surf_en"])
+
+    mem.append(tmp)
+
+dft_3d = mem
+
 
 
 def get_entry(jid):
@@ -47,7 +75,7 @@ class Evaluator(object):
         atoms_dataset=None,
         calculator_type="",
         calculator=None,
-        fmax=0.03,
+        fmax=0.05,
         nsteps=200,
         max_miller_index=1,
         id_tag="jid",
@@ -89,9 +117,12 @@ class Evaluator(object):
         if self.calculator_type == "emt":
             return EMT()
         elif self.calculator_type == "M3GNet":
+            import matgl
             from matgl.ext.ase import M3GNetCalculator
 
             pot = matgl.load_model("M3GNet-MP-2021.2.8-PES")
+            calculator = M3GNetCalculator(pot, stress_weight=0.01)
+            return calculator
         elif self.calculator_type == "ALIGNN-FF":
             from alignn.ff.ff import AlignnAtomwiseCalculator, default_path
 
@@ -108,7 +139,8 @@ class Evaluator(object):
                 # path=model_path, stress_wt=0.3, model_filename='best_model.pt',force_mult_natoms=False
                 path=model_path,
                 stress_wt=0.3,
-                model_filename="best_model.pt",
+                model_filename="current_model.pt",
+                #model_filename="best_model.pt",
                 force_mult_natoms=True,
             )
         elif self.calculator_type == "CHGNet":
@@ -217,6 +249,7 @@ class Evaluator(object):
         return info
 
     def run_all(self):
+        do_phonon = True
         initial_a = []
         initial_b = []
         initial_c = []
@@ -236,7 +269,7 @@ class Evaluator(object):
         all_dat = {}
         ids = []
         timings = []
-        for i in self.atoms_dataset:
+        for i in tqdm(self.atoms_dataset, total=len(self.atoms_dataset)):
             t1 = time.time()
             tmp = {}
             id = i[self.id_tag]
@@ -262,11 +295,13 @@ class Evaluator(object):
             tmp["elastic_tensor"] = elastic_tensor
             modulus = self.ev_curve(atoms=optim_atoms, id=id, entry=entry)
             tmp["modulus"] = modulus
-            # surface_energy = self.surface_energy(atoms=optim_atoms, id=id)
-            # tmp['surface_energy']=surface_energy
-            # vacancy_energy = self.vacancy_energy(atoms=optim_atoms, id=id)
-            # tmp['vacancy_energy']=vacancy_energy
-            phon = self.phonons(atoms=optim_atoms, id=id)
+            surface_energy = self.surface_energy(atoms=optim_atoms, id=id, entry=entry)
+            tmp['surface_energy']=surface_energy
+            vacancy_energy = self.vacancy_energy(atoms=optim_atoms, id=id, entry=entry)
+            tmp['vacancy_energy']=vacancy_energy
+            if do_phonon:
+                print("Running phonon")
+                phon = self.phonons(atoms=optim_atoms, id=id)
             # tmp['phon']=phon
             name = id + "_dat.json"
             fname = os.path.join(self.output_dir, name)
@@ -310,24 +345,39 @@ class Evaluator(object):
         all_dat["form_en"] = form_en
         all_dat["form_en_entry"] = form_en_entry
         all_dat["timings"] = timings
+        error_dat = {}
+
         err_a = mean_absolute_error(initial_a, final_a)
         err_b = mean_absolute_error(initial_b, final_b)
         err_c = mean_absolute_error(initial_c, final_c)
+        err_fen = mean_absolute_error(form_en_entry, form_en)
         err_vol = mean_absolute_error(initial_vol, final_vol)
         err_c11 = mean_absolute_error(c11_entry, c11)
         err_c44 = mean_absolute_error(c44_entry, c44)
-        err_kv = mean_absolute_error(kv_entry, kv)
+        # err_kv = mean_absolute_error(kv_entry, kv)
+        error_dat["err_a"] = err_a
+        error_dat["err_b"] = err_b
+        error_dat["err_c"] = err_c
+        error_dat["err_form"] = err_fen
+        error_dat["err_vol"] = err_vol
+        error_dat["err_c11"] = err_c11
+        error_dat["err_c44"] = err_c44
+        # error_dat['err_kv']=err_kv
         df = pd.DataFrame(all_dat)
         fname = os.path.join(self.output_dir, "dat.csv")
         df.to_csv(fname, index=False)
         print("a", err_a)
         print("b", err_b)
         print("c", err_c)
+        print("fen", err_fen)
         print("vol", err_vol)
         print("c11", err_c11)
         print("c44", err_c44)
-        print("kv", err_kv)
-        return all_dat
+        # print("kv", err_kv)
+        return (
+            error_dat,
+            all_dat,
+        )
 
     def elastic_tensor(
         self, atoms=None, id=None, entry=None, entry_key="elastic_tensor"
@@ -366,7 +416,7 @@ class Evaluator(object):
         # dumpjson(data=info, filename=fname)
         return info
 
-    def surface_energy(self, atoms=None, jid="x", cell_relax=False, id=None):
+    def surface_energy(self, atoms=None, jid="x", cell_relax=False, id=None,entry=None,entry_key='surface'):
         spg = Spacegroup3D(atoms=atoms)
         cvn = spg.conventional_standard_structure
         mills = symmetrically_distinct_miller_indices(
@@ -409,6 +459,8 @@ class Evaluator(object):
             info["surf_en"] = surf_en
             print(name, surf_en)
             surface_results.append(info)
+        if entry is not None and entry_key in entry:
+            print('surface',entry_key,entry[entry_key])
         # name = id + "_surf.json"
         # fname = os.path.join(self.output_dir, name)
         # dumpjson(data=info, filename=fname)
@@ -420,6 +472,8 @@ class Evaluator(object):
         jid="x",
         cell_relax=False,
         id=None,
+        entry=None,
+        entry_key="vacancy"
     ):
         chem_pot = get_optb88vdw_energy()
         strts = Vacancy(atoms).generate_defects(
@@ -476,6 +530,8 @@ class Evaluator(object):
             info["defect_en"] = defect_en
             print(name, defect_en)
             vacancy_results.append(info)
+        if entry is not None and entry_key in entry:
+            print('vacancy',entry_key,entry[entry_key])
         # name = id + "_vac.json"
         # fname = os.path.join(self.output_dir, name)
         # dumpjson(data=info, filename=fname)
@@ -665,139 +721,32 @@ class Evaluator(object):
 
 if __name__ == "__main__":
     jids_check = [
-        "JVASP-8158",  # SiC F-43m
         "JVASP-1002",  # Si
-        "JVASP-816",  # Al
-        "JVASP-867",  # Cu
-        "JVASP-1029",  # Ti
-        "JVASP-861",  # Cr
-        "JVASP-30",  # GaN Pg3mmc
-        "JVASP-8169",  # GaN F-43m
-        "JVASP-890",  # Ge
-        "JVASP-8118",  # SiC P6_3mmc
-        "JVASP-107",  # SiC P6_3mc
-        "JVASP-39",  # AlN P6_3mc
-        "JVASP-7844",  # AlN F-43m
-        "JVASP-35106",  # Al3GaN4 P-43m
-        "JVASP-1174",  # GaAs F-43m
-        "JVASP-1372",  # AlAs F-43m
-        "JVASP-91",  # C Fd-3m
-        "JVASP-1186",  # InAs F-43M
-        "JVASP-1408",  # AlSb F-43M
-        "JVASP-105410",  # SiGe F-43m
-        "JVASP-1177",  # GaSb F-43m
-        "JVASP-79204",  # BN P63mc
-        "JVASP-1393",  # GaP F-43m
-        "JVASP-1312",  # BP F-43m
-        "JVASP-1327",  # AlP F-43m
-        "JVASP-1183",  # InP F-43m
-        "JVASP-1192",  # CdSe F-43m
-        "JVASP-8003",  # CdS F-43m
-        "JVASP-96",  # ZnSe F-43m
-        "JVASP-1198",  # ZnTe F-43m
-        "JVASP-1195",  # ZnO P63mc
-        "JVASP-9147",  # HfO2 P21c
-        "JVASP-41",  # SiO2 P3_221
-        "JVASP-34674",  # SiO2 C222_1
-        "JVASP-113",  # ZrO2 P2_1c
-        "JVASP-32",  # Al2O3 R-3c
+        #"JVASP-8169",  # GaN F-43m
+        #"JVASP-890",  # Ge
+        #"JVASP-1174",  # GaAs F-43m
+        #"JVASP-1372",  # AlAs F-43m
+        #"JVASP-1186",  # InAs F-43M
+
+        # "JVASP-8158", #SiC F-43m
+        # "JVASP-7844", #AlN F-43m
+        # "JVASP-35106", #Al3GaN4 P-43m
+        # "JVASP-1408", #AlSb F-43M
+        # "JVASP-105410", #SiGe F-43m
+        # "JVASP-1177", #GaSb F-43m
+        # "JVASP-79204", #BN P63mc
+        # "JVASP-1393", #GaP F-43m
+        # "JVASP-1312", #BP F-43m
+        # "JVASP-1327", #AlP F-43m
+        # "JVASP-1183", #InP F-43m
+        # "JVASP-1192", #CdSe F-43m
+        # "JVASP-8003", #CdS F-43m
+        # "JVASP-96", #ZnSe F-43m
     ]
-    jids_check = [
-        "JVASP-1002",
-        "JVASP-9147",
-        "JVASP-1312",
-        "JVASP-802",
-        "JVASP-816",
-        "JVASP-919",
-        "JVASP-1195",
-        "JVASP-1393",
-        "JVASP-113",
-        "JVASP-7630",
-        "JVASP-1174",
-        "JVASP-969",
-        "JVASP-34674",
-        "JVASP-993",
-        "JVASP-890",
-        "JVASP-79204",
-        "JVASP-934",
-        "JVASP-8169",
-        "JVASP-1183",
-        "JVASP-1327",
-        "JVASP-895",
-        "JVASP-861",
-        "JVASP-1177",
-        "JVASP-21195",
-        "JVASP-14812",
-        "JVASP-35106",
-        "JVASP-943",
-        "JVASP-32",
-        "JVASP-1372",
-        "JVASP-1192",
-        "JVASP-41",
-        "JVASP-958",
-        "JVASP-963",
-        "JVASP-981",
-        "JVASP-828",
-        "JVASP-1180",
-        "JVASP-7762",
-        "JVASP-8158",
-        "JVASP-1702",
-        "JVASP-23",
-        "JVASP-840",
-        "JVASP-972",
-        "JVASP-95",
-        "JVASP-30",
-        "JVASP-1198",
-        "JVASP-7844",
-        "JVASP-91",
-        "JVASP-8118",
-        "JVASP-14837",
-        "JVASP-8003",
-        "JVASP-858",
-        "JVASP-837",
-        "JVASP-105410",
-        "JVASP-931",
-        "JVASP-1201",
-        "JVASP-819",
-        "JVASP-1186",
-        "JVASP-96",
-        "JVASP-1029",
-        "JVASP-107",
-        "JVASP-825",
-        "JVASP-1408",
-        "JVASP-810",
-        "JVASP-1189",
-        "JVASP-867",
-        "JVASP-901",
-        "JVASP-39",
-        "JVASP-984",
-        "JVASP-966",
-    ]
-    # print("energy, kv,elastic_tensor", energy, kv, elastic_tensor)
-    jids_check = [
-        "JVASP-1002",
-        "JVASP-816",
-        "JVASP-867",
-        "JVASP-1174",
-        "JVASP-1327",
-        "JVASP-8003",
-        "JVASP-1372",
-        "JVASP-1192",
-        "JVASP-1198",
-        "JVASP-1408",
-        "JVASP-1186",
-        "JVASP-96",
-        "JVASP-1183",
-        "JVASP-8118",
-        "JVASP-30",
-        "JVASP-39",
-        "JVASP-1195",
-        "JVASP-1180",
-    ]
-    jids_check = [
-        "JVASP-1002",
-        "JVASP-816",
-    ]
+    print(len(jids_check))
+    for i in jids_check:
+        print(get_entry(i)["bulk_modulus_kv"])
+
     atoms_dataset = []
     for i in jids_check:
         print(i)
@@ -805,19 +754,43 @@ if __name__ == "__main__":
         entry = get_entry(i)  # get_jid_data(jid=i, dataset="dft_3d")
         atoms = entry["atoms"]
         atoms_dataset.append({"atoms": atoms, "jid": i, "entry": entry})
+    matgl_time = 88.64634680747986
+    all_dat_matgl = {'err_a': 0.01238383333333326, 'err_b': 0.01238450000000002, 'err_c': 0.012383333333333413, 'err_form': 1.0237318702125549, 'err_vol': 0.406173692516757, 'err_c11': 34.22407778780076, 'err_c44': 47.3191621432697}
+    """
+    t1=time.time()
     ev = Evaluator(
         atoms_dataset=atoms_dataset,
-        # atoms_dataset=[{"atoms": atoms, "jid": i, "entry": entry}],
-        # output_dir="out_mp",
-        output_dir="out_fd",
-        # calculator_type="CHGNet",
-        calculator_type="ALIGNN-FF",
-        # calculator_type="emt",
-        # alignn_model_path = None
-        # alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111a",
-        # alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111b",
-        # alignn_model_path = "/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111e/"
-        alignn_model_path="/wrk/knc6/Software/alignn_cutoff_parallel/alignn/alignn/ff/v8.29.2024_dft_3d",
-        # alignn_model_path="/wrk/knc6/AFFBench/fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111b",
+        output_dir="out_4",
+        calculator_type="M3GNet",
+        #output_dir="out_cut4301k",
+        #calculator_type="ALIGNN-FF",
+        # alignn_model_path = "/wrk/knc6/Software/alignn_cutoff_parallel/alignn/alignn/ff/v8.29.2024_mpf"
+        #alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111e/",
+        #alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111",
     )
-    ev.run_all()
+    all_dat_matgl, _ = ev.run_all()
+    t2=time.time()
+    matgl_time=t2-t1
+    """
+
+    t1=time.time()
+    ev = Evaluator(
+        atoms_dataset=atoms_dataset,
+        #output_dir="out_4",
+        #calculator_type="M3GNet",
+        output_dir="out_cut4301k",
+        calculator_type="ALIGNN-FF",
+        # alignn_model_path = "/wrk/knc6/Software/alignn_cutoff_parallel/alignn/alignn/ff/v8.29.2024_mpf"
+        #alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111e/",
+        #alignn_model_path="fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111b/",
+        #alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111d",
+        alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111a",
+        #alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111c",
+        #alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult/out111d",
+        #alignn_model_path="/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111",
+    )
+    all_dat_v5_27_2024, _ = ev.run_all()
+    t2=time.time()
+    al_time=t2-t1
+    print("all_dat_v5_27_2024", all_dat_v5_27_2024,al_time)
+    print("all_dat_matgl", all_dat_matgl,matgl_time)
