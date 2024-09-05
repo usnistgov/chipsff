@@ -794,10 +794,11 @@ class Evaluator(object):
 if __name__ == "__main__":
     jids_check = [
         "JVASP-1002",  # Si
-        # "JVASP-1174",  # GaAs F-43m
-        # "JVASP-8169",  # GaN F-43m
-        # "JVASP-890",  # Ge
-        # "JVASP-1372",  # AlAs F-43m
+        "JVASP-1174",  # GaAs F-43m
+        "JVASP-890",  # Ge
+        "JVASP-8169",  # GaN F-43m
+        "JVASP-1372",  # AlAs F-43m
+        "JVASP-8158",  # SiC F-43m
         # "JVASP-1186",  # InAs F-43M
         # "JVASP-8158", #SiC F-43m
         # "JVASP-7844", #AlN F-43m
@@ -824,34 +825,51 @@ if __name__ == "__main__":
         entry = get_entry(i)
         atoms = entry["atoms"]
         atoms_dataset.append({"atoms": atoms, "jid": i, "entry": entry})
+
+    # M3GNet
     t1 = time.time()
     ev = Evaluator(
         atoms_dataset=atoms_dataset,
-        output_dir="out_4",
+        output_dir="out_m3gnet",
         calculator_type="M3GNet",
     )
     all_dat_matgl, _ = ev.run_all()
     t2 = time.time()
     matgl_time = t2 - t1
+
+    # ALIGNN-FF
     t1 = time.time()
     ev = Evaluator(
         atoms_dataset=atoms_dataset,
         output_dir="out_cut4301k",
         calculator_type="ALIGNN-FF",
-        alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111a",
+        alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111c/",
+        # alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111a",
     )
     all_dat_v5_27_2024, _ = ev.run_all()
     t2 = time.time()
     al_time = t2 - t1
+
+    t1 = time.time()
+    ev = Evaluator(
+        atoms_dataset=atoms_dataset,
+        output_dir="out_chgnet",
+        calculator_type="CHGNet",
+    )
+    all_dat_chgnet, _ = ev.run_all()
+    t2 = time.time()
+    chgnet_time = t2 - t1
+
     print("all_dat_v5_27_2024", all_dat_v5_27_2024)
     print("all_dat_matgl", all_dat_matgl)
+    print("all_dat_chgnet", all_dat_chgnet)
     df = pd.DataFrame(
-        [all_dat_matgl, all_dat_v5_27_2024], index=["matgl", "v5_27_2024"]
+        [all_dat_matgl, all_dat_chgnet, all_dat_v5_27_2024],
+        index=["matgl", "chgnet", "v5_27_2024"],
     )
     print(df)
     import plotly.express as px
 
-
     fig = px.imshow(df, text_auto=True)
-    #fig.show()
+    # fig.show()
     fig.write_html("error.html")
