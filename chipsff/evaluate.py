@@ -1,4 +1,3 @@
-# https://arxiv.crg/pdf/2407.09674
 import numpy as np
 from ase.optimize.fire import FIRE
 from ase.constraints import ExpCellFilter
@@ -16,12 +15,14 @@ from jarvis.db.jsonutils import dumpjson
 from jarvis.analysis.defects.surface import Surface
 from jarvis.analysis.defects.vacancy import Vacancy
 from jarvis.analysis.thermodynamics.energetics import get_optb88vdw_energy
+from intermat.generate import InterfaceCombi
 import ase
 from jarvis.core.kpoints import Kpoints3D as Kpoints
 from phonopy import Phonopy
 from phonopy.file_IO import (
     write_FORCE_CONSTANTS,
 )
+import pandas as pd
 import os
 import time
 from tqdm import tqdm
@@ -31,16 +32,18 @@ from collections import defaultdict
 import glob
 from jarvis.db.jsonutils import loadjson
 from sklearn.metrics import mean_absolute_error
-import pandas as pd
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+from sklearn.metrics import r2_score
+from alignn.ff.ff import AlignnAtomwiseCalculator, default_path
 
 
 dft_3d = data("dft_3d")
-# x = data("dft_3d")
 y = data("vacancydb")
 surf_url = "https://figshare.com/ndownloader/files/46355689"
 z = get_request_data(js_tag="surface_db_dd.json", url=surf_url)
 defect_ids = list(set([i["jid"] for i in y]))
-# surf_ids = list(set([("_".join(i["name"].split('Surface-')[1].split("_"))) for i in z]))
 surf_ids = list(
     set([i["name"].split("Surface-")[1].split("_miller_")[0] for i in z])
 )
@@ -99,6 +102,8 @@ class Evaluator(object):
         chem_pot_ref={},
         alignn_model_path=None,
         output_dir="out",
+        make_plot=True,
+        chem_pot_relax=False,
     ):
         self.atoms_dataset = atoms_dataset
         if isinstance(atoms_dataset, str):
@@ -111,6 +116,8 @@ class Evaluator(object):
         self.id_tag = id_tag
         self.alignn_model_path = alignn_model_path
         self.max_miller_index = max_miller_index
+        self.make_plot = make_plot
+        self.chem_pot_relax = chem_pot_relax
         if self.calculator is None:
             self.calculator = self.setup_calculator()
         if not chem_pot_ref:
@@ -148,7 +155,7 @@ class Evaluator(object):
                 stress_wt=0.3,
                 model_filename="current_model.pt",
                 # model_filename="best_model.pt",
-                force_mult_natoms=True,
+                force_mult_natoms=False,
             )
         elif self.calculator_type == "CHGNet":
             from chgnet.model.dynamics import CHGNetCalculator
@@ -235,7 +242,7 @@ class Evaluator(object):
                 atoms_en = (
                     self.get_energy(
                         atoms=atoms_elemental,
-                        cell_relax=cell_relax,
+                        cell_relax=self.chem_pot_relax,
                         constant_volume=False,
                     )[0]
                 ) / atoms_elemental.num_atoms
@@ -279,6 +286,8 @@ class Evaluator(object):
         vac_en_entry = []
         all_dat = {}
         ids = []
+        wad_entry = []
+        wad = []
         timings = []
         for i in tqdm(self.atoms_dataset, total=len(self.atoms_dataset)):
             t1 = time.time()
@@ -375,6 +384,14 @@ class Evaluator(object):
         all_dat["surf_en_entry"] = ";".join(map(str, surf_en_entry))
         all_dat["vac_en"] = ";".join(map(str, vac_en))
         all_dat["vac_en_entry"] = ";".join(map(str, vac_en_entry))
+
+        wad_en, wad_en_entry = self.interface_workflow()
+
+        all_dat["wad_en"] = ";".join(map(str, wad_en))
+        all_dat["wad_en_entry"] = ";".join(map(str, wad_en_entry))
+        err_wad = ""
+        if len(wad_en):
+            err_wad = mean_absolute_error(wad_en_entry, wad_en)
         all_dat["timings"] = timings
         error_dat = {}
         if len(initial_a) > 0:
@@ -401,6 +418,7 @@ class Evaluator(object):
             err_vac_en = mean_absolute_error(vac_en_entry, vac_en)
             # error_dat['err_kv']=err_kv
             error_dat["err_vac_en"] = err_vac_en
+        error_dat["err_wad"] = err_wad
         error_dat["time"] = np.sum(np.array(timings))
         print("error_dat", error_dat)
         df = pd.DataFrame(all_dat)
@@ -414,10 +432,155 @@ class Evaluator(object):
         print("c11", err_c11)
         print("c44", err_c44)
         # print("kv", err_kv)
+        if self.make_plot:
+            self.plot_results(fname)
         return (
             error_dat,
             all_dat,
         )
+
+    def plot_results(self, fname="out_mp_tak4_cut4/dat.csv"):
+        df = pd.read_csv(fname)
+        print(df)
+
+        the_grid = GridSpec(4, 3)
+        plt.rcParams.update({"font.size": 18})
+        plt.figure(figsize=(16, 14))
+
+        plt.subplot(the_grid[0, 0])
+        plt.scatter(df["initial_a"], df["final_a"])
+        plt.plot(df["initial_a"], df["initial_a"], c="black", linestyle="-.")
+        plt.xlabel("a-DFT ($\AA$)")
+        plt.ylabel("a-ML ($\AA$)")
+        min_x = min(pd.concat([df["initial_a"], df["final_a"]]))
+        max_x = max(pd.concat([df["initial_a"], df["final_a"]]))
+        min_y = min(pd.concat([df["initial_a"], df["final_a"]]))
+        max_y = max(pd.concat([df["initial_a"], df["final_a"]]))
+        # plt.xlim([min_x,max_x])
+        # plt.ylim([min_y,max_y])
+        title = "(a) " + str(
+            round(r2_score(df["initial_a"], df["final_a"]), 2)
+        )
+        plt.title(title)
+
+        plt.subplot(the_grid[0, 1])
+        plt.scatter(df["initial_b"], df["final_b"])
+        plt.plot(df["initial_b"], df["initial_b"], c="black", linestyle="-.")
+        plt.xlabel("b-DFT ($\AA$)")
+        plt.ylabel("b-ML ($\AA$)")
+        title = "(b) " + str(
+            round(r2_score(df["initial_b"], df["final_b"]), 2)
+        )
+        plt.title(title)
+
+        plt.subplot(the_grid[0, 2])
+        plt.scatter(df["initial_c"], df["final_c"])
+        plt.plot(df["initial_c"], df["initial_c"], c="black", linestyle="-.")
+        plt.xlabel("c-DFT ($\AA$)")
+        plt.ylabel("c-ML ($\AA$)")
+        title = "(c) " + str(
+            round(r2_score(df["initial_c"], df["final_c"]), 2)
+        )
+        plt.title(title)
+
+        plt.subplot(the_grid[1, 0])
+        plt.scatter(df["form_en_entry"], df["form_en"])
+        plt.plot(
+            df["form_en_entry"], df["form_en_entry"], c="black", linestyle="-."
+        )
+        plt.xlabel("$E_f$-DFT (eV/atom)")
+        plt.ylabel("$E_f$-ML (eV/atom)")
+        title = "(d) " + str(
+            round(r2_score(df["form_en_entry"], df["form_en"]), 2)
+        )
+        plt.title(title)
+
+        plt.subplot(the_grid[1, 1])
+        plt.scatter(df["initial_vol"], df["final_vol"])
+        plt.plot(
+            df["initial_vol"], df["initial_vol"], c="black", linestyle="-."
+        )
+        plt.xlabel("vol-DFT (${\AA}^3$)")
+        plt.ylabel("vol-ML (${\AA}^3$)")
+        title = "(e) " + str(
+            round(r2_score(df["initial_b"], df["final_b"]), 2)
+        )
+        plt.title(title)
+
+        plt.subplot(the_grid[1, 2])
+        plt.scatter(df["c11_entry"], df["c11"])
+        plt.plot(df["c11_entry"], df["c11_entry"], c="black", linestyle="-.")
+        plt.xlabel("$C_{11}$-DFT (GPa)")
+        plt.ylabel("$C_{11}$-ML (GPa)")
+        title = "(f) " + str(round(r2_score(df["c11_entry"], df["c11"]), 2))
+        plt.title(title)
+
+        plt.subplot(the_grid[2, 0])
+        plt.scatter(df["c44_entry"], df["c44"])
+        plt.plot(df["c44_entry"], df["c44_entry"], c="black", linestyle="-.")
+        plt.xlabel("$C_{44}$-DFT (GPa)")
+        plt.ylabel("$C_{44}$-ML (GPa)")
+        title = "(g) " + str(round(r2_score(df["c44_entry"], df["c44"]), 2))
+        plt.title(title)
+
+        plt.subplot(the_grid[2, 1])
+        x = np.concatenate(
+            df["vac_en_entry"].apply(
+                lambda x: np.array(x.split(";"), dtype="float")
+            )
+        )
+        y = np.concatenate(
+            df["vac_en"].apply(lambda x: np.array(x.split(";"), dtype="float"))
+        )
+        plt.scatter(x, y)
+        plt.plot(x, x, linestyle="-.", c="black")
+        title = "(h) " + str(round(r2_score(x, y), 2))
+        plt.title(title)
+        plt.xlabel("$E_{vac}$-DFT (eV)")
+        plt.ylabel("$E_{vac}$-ML (eV)")
+
+        plt.subplot(the_grid[2, 2])
+        x = np.concatenate(
+            df["surf_en_entry"].apply(
+                lambda x: np.array(x.split(";"), dtype="float")
+            )
+        )
+        y = np.concatenate(
+            df["surf_en"].apply(
+                lambda x: np.array(x.split(";"), dtype="float")
+            )
+        )
+        plt.scatter(x, y)
+        plt.plot(x, x, linestyle="-.", c="black")
+        title = "(i) " + str(round(r2_score(x, y), 2))
+        plt.title(title)
+        plt.xlabel("$E_{surf}$-DFT (J/m2)")
+        plt.ylabel("$E_{surf}$-ML (J/m2)")
+
+        plt.subplot(the_grid[3, 0])
+        x = np.concatenate(
+            df["wad_en_entry"].apply(
+                lambda x: np.array(x.split(";"), dtype="float")
+            )
+        )
+        y = np.concatenate(
+            df["wad_en"].apply(lambda x: np.array(x.split(";"), dtype="float"))
+        )
+
+        print("wadx", x)
+        print("wady", y)
+        plt.scatter(x, y)
+        plt.plot(x, x, c="black", linestyle="-.")
+        plt.xlabel("$W_{ad}$-prev (J$m^{_2}$)")
+        plt.ylabel("$W_{ad}$-ML(J$m^-{2}$)")
+        # plt.ylim([min_y,max_y])
+        title = "(h) " + str(round(r2_score(x, y), 2))
+        plt.title(title)
+
+        pname = fname.replace("dat.csv", "dat.png")
+        plt.tight_layout()
+        plt.savefig(pname)
+        plt.close()
 
     def elastic_tensor(
         self, atoms=None, id=None, entry=None, entry_key="elastic_tensor"
@@ -577,7 +740,7 @@ class Evaluator(object):
                 atoms_en = (
                     self.get_energy(
                         atoms=atoms_elemental,
-                        cell_relax=cell_relax,
+                        cell_relax=self.chem_pot_relax,
                         constant_volume=False,
                     )[0]
                 ) / atoms_elemental.num_atoms
@@ -790,6 +953,78 @@ class Evaluator(object):
 
         return info
 
+    def interface_workflow(self):
+        wad_en = []
+        wad_en_entry = []
+        df_metals = pd.read_csv(
+            "https://figshare.com/ndownloader/files/49065421"
+        )
+        df_insulators = pd.read_csv(
+            "https://figshare.com/ndownloader/files/49065418"
+        )
+        df = pd.concat([df_insulators, df_metals])
+        dataset1 = data("dft_3d")
+        dataset2 = data("dft_2d")
+        dataset = dataset1 + dataset2
+
+        for i, ii in tqdm(df.iterrows(), total=len(df)):
+            if len(wad_en_entry) < 3:
+                # if ii['Film'] in metals and ii['Subs'] in metals:
+                film_ids = []
+                subs_ids = []
+                film_indices = []
+                subs_indices = []
+                # try:
+                film_ids.append("JVASP-" + str(ii["JARVISID-Film"]))
+                subs_ids.append("JVASP-" + str(ii["JARVISID-Subs"]))
+                film_indices.append(
+                    [
+                        int(ii["Film-miller"][1]),
+                        int(ii["Film-miller"][2]),
+                        int(ii["Film-miller"][3]),
+                    ]
+                )
+                subs_indices.append(
+                    [
+                        int(ii["Subs-miller"][1]),
+                        int(ii["Subs-miller"][2]),
+                        int(ii["Subs-miller"][3]),
+                    ]
+                )
+                print(
+                    film_indices[-1],
+                    subs_indices[-1],
+                    film_ids[-1],
+                    subs_ids[-1],
+                )
+                x = InterfaceCombi(
+                    dataset=dataset,
+                    film_indices=film_indices,
+                    subs_indices=subs_indices,
+                    film_ids=film_ids,
+                    subs_ids=subs_ids,
+                    disp_intvl=0.0,
+                )
+                wads = x.calculate_wad(
+                    method="other",
+                    extra_params={"calculator": self.calculator},
+                )
+                wads = np.array(x.wads["wads"])
+                index = np.argmin(wads)
+                wad_en.append(wads[index])
+                wad_en_entry.append(float(ii["PrevData W_adhesion (Jm-2)"]))
+                print(ii)
+                print("Pred Wad", -1 * wads[index])
+                print()
+                # wads = x.calculate_wad(method="vasp", index=index)
+                # wads = x.calculate_wad_vasp(sub_job=True)
+        # except:
+        #  pass
+        return wad_en, wad_en_entry
+
+
+# metal_metal_interface_workflow(calc)
+
 
 if __name__ == "__main__":
     jids_check = [
@@ -797,23 +1032,23 @@ if __name__ == "__main__":
         "JVASP-1174",  # GaAs F-43m
         "JVASP-890",  # Ge
         "JVASP-8169",  # GaN F-43m
-        "JVASP-1372",  # AlAs F-43m
         "JVASP-8158",  # SiC F-43m
-        # "JVASP-1186",  # InAs F-43M
-        # "JVASP-8158", #SiC F-43m
-        # "JVASP-7844", #AlN F-43m
-        # "JVASP-35106", #Al3GaN4 P-43m
-        # "JVASP-1408", #AlSb F-43M
-        # "JVASP-105410", #SiGe F-43m
-        # "JVASP-1177", #GaSb F-43m
-        # "JVASP-79204", #BN P63mc
-        # "JVASP-1393", #GaP F-43m
-        # "JVASP-1312", #BP F-43m
-        # "JVASP-1327", #AlP F-43m
-        # "JVASP-1183", #InP F-43m
-        # "JVASP-1192", #CdSe F-43m
-        # "JVASP-8003", #CdS F-43m
-        # "JVASP-96", #ZnSe F-43m
+        "JVASP-1372",  # AlAs F-43m
+        "JVASP-1186",  # InAs F-43M
+        "JVASP-8158",  # SiC F-43m
+        "JVASP-7844",  # AlN F-43m
+        "JVASP-35106",  # Al3GaN4 P-43m
+        "JVASP-1408",  # AlSb F-43M
+        "JVASP-105410",  # SiGe F-43m
+        "JVASP-1177",  # GaSb F-43m
+        "JVASP-79204",  # BN P63mc
+        "JVASP-1393",  # GaP F-43m
+        "JVASP-1312",  # BP F-43m
+        "JVASP-1327",  # AlP F-43m
+        "JVASP-1183",  # InP F-43m
+        "JVASP-1192",  # CdSe F-43m
+        "JVASP-8003",  # CdS F-43m
+        "JVASP-96",  # ZnSe F-43m
     ]
     print(len(jids_check))
     for i in jids_check:
@@ -841,15 +1076,90 @@ if __name__ == "__main__":
     t1 = time.time()
     ev = Evaluator(
         atoms_dataset=atoms_dataset,
-        output_dir="out_cut4301k",
+        output_dir="out_mp_tak4_cut4",
         calculator_type="ALIGNN-FF",
-        alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111c/",
+        alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4/out111",
+        # alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111c/",
         # alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111a",
     )
-    all_dat_v5_27_2024, _ = ev.run_all()
+    all_dat_mp_tak4_cut4, _ = ev.run_all()
     t2 = time.time()
     al_time = t2 - t1
 
+    # ALIGNN-FF
+    t1 = time.time()
+    ev = Evaluator(
+        atoms_dataset=atoms_dataset,
+        output_dir="out_mp_tak4",
+        calculator_type="ALIGNN-FF",
+        alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111c",
+        # alignn_model_path="aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111c/",
+        # alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111a",
+    )
+    all_dat_mp_tak4, _ = ev.run_all()
+    t2 = time.time()
+    al_time = t2 - t1
+
+    # ALIGNN-FF
+    t1 = time.time()
+    ev = Evaluator(
+        atoms_dataset=atoms_dataset,
+        output_dir="out_noforce_mult_cut4",
+        calculator_type="ALIGNN-FF",
+        alignn_model_path="aff307k_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111a",
+    )
+    all_dat_307_noforce_mult_cut4, _ = ev.run_all()
+    t2 = time.time()
+    al_time = t2 - t1
+
+    # ALIGNN-FF
+    t1 = time.time()
+    ev = Evaluator(
+        atoms_dataset=atoms_dataset,
+        output_dir="out_fd_noforce_mult_cut4",
+        calculator_type="ALIGNN-FF",
+        alignn_model_path="fd2.5mil_lmdb_param_low_rad_use_cutoff_take4_noforce_mult_cut4/out111/",
+    )
+    all_dat_fd_noforce_mult_cut4, _ = ev.run_all()
+    t2 = time.time()
+    al_time = t2 - t1
+
+    # ALIGNN-FF
+    t1 = time.time()
+    ev = Evaluator(
+        atoms_dataset=atoms_dataset,
+        output_dir="out_v25",
+        calculator_type="ALIGNN-FF",
+        alignn_model_path=default_path(),
+    )
+    v25, _ = ev.run_all()
+    t2 = time.time()
+    al_time = t2 - t1
+
+    # CHGNET
+    t1 = time.time()
+    ev = Evaluator(
+        atoms_dataset=atoms_dataset,
+        output_dir="out_chgnet",
+        calculator_type="CHGNet",
+    )
+    all_dat_chgnet, _ = ev.run_all()
+    t2 = time.time()
+    chgnet_time = t2 - t1
+    df = pd.DataFrame(
+        [
+            all_dat_matgl,
+            all_dat_chgnet,
+            all_dat_mp_tak4,
+            all_dat_mp_tak4_cut4,
+            all_dat_fd_noforce_mult_cut4,
+            all_dat_307_noforce_mult_cut4,
+            v25,
+        ],
+        index=["matgl", "chgnet", "mp", "mp4", "fd", "f307", "f527"],
+    )
+
+    """
     t1 = time.time()
     ev = Evaluator(
         atoms_dataset=atoms_dataset,
@@ -863,10 +1173,7 @@ if __name__ == "__main__":
     print("all_dat_v5_27_2024", all_dat_v5_27_2024)
     print("all_dat_matgl", all_dat_matgl)
     print("all_dat_chgnet", all_dat_chgnet)
-    df = pd.DataFrame(
-        [all_dat_matgl, all_dat_chgnet, all_dat_v5_27_2024],
-        index=["matgl", "chgnet", "v5_27_2024"],
-    )
+    """
     print(df)
     import plotly.express as px
 
