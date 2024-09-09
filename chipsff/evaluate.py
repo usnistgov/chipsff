@@ -1,3 +1,4 @@
+# https://arxiv.crg/pdf/2407.09674
 import numpy as np
 from ase.optimize.fire import FIRE
 from ase.constraints import ExpCellFilter
@@ -95,9 +96,11 @@ class Evaluator(object):
         tasks=[
             "geometry_relaxation",
             "bulk_modulus",
+            "elastic_tensor",
             "vacancy_formation",
             "surface_formation",
-            "zpe",
+            "interface",
+            "phonon",
         ],
         chem_pot_ref={},
         alignn_model_path=None,
@@ -152,7 +155,7 @@ class Evaluator(object):
                 model_path = self.alignn_model_path
             return AlignnAtomwiseCalculator(
                 path=model_path,
-                stress_wt=0.3,
+                stress_wt=0.1,
                 model_filename="current_model.pt",
                 # model_filename="best_model.pt",
                 force_mult_natoms=False,
@@ -263,7 +266,6 @@ class Evaluator(object):
         return info
 
     def run_all(self):
-        do_phonon = True
         initial_a = []
         initial_b = []
         initial_c = []
@@ -299,39 +301,48 @@ class Evaluator(object):
             atoms = Atoms.from_dict(i["atoms"])
             print("id", id)
             print("atoms", atoms)
-            energy, optim_atoms, info = self.get_energy(
-                atoms=atoms, id=id, entry=entry
-            )
-            tmp["energy"] = info
-            print("final atoms", optim_atoms)
-            fen = self.get_formation_energy(
-                atoms=optim_atoms, energy=energy, id=id, entry=entry
-            )
-            tmp["form_en"] = fen
-            # print('form_en',form_en)
-            elastic_tensor = self.elastic_tensor(
-                atoms=optim_atoms, id=id, entry=entry
-            )
-            tmp["elastic_tensor"] = elastic_tensor
-            modulus = self.ev_curve(atoms=optim_atoms, id=id, entry=entry)
-            tmp["modulus"] = modulus
-            surface_energy = self.surface_energy(
-                atoms=optim_atoms, id=id, entry=entry
-            )
-            for ii in surface_energy:
-                if ii["surf_en_entry"] != "":
-                    surf_en_entry.append(ii["surf_en_entry"])
-                    surf_en.append(ii["surf_en"])
-            tmp["surface_energy"] = surface_energy
-            vacancy_energy = self.vacancy_energy(
-                atoms=optim_atoms, id=id, entry=entry
-            )
-            for ii in vacancy_energy:
+            if "geometry_relaxation" in self.tasks:
+              energy, optim_atoms, info = self.get_energy(
+                  atoms=atoms, id=id, entry=entry
+              )
+              tmp["energy"] = info
+              print("final atoms", optim_atoms)
+   
+              fen = self.get_formation_energy(
+                  atoms=optim_atoms, energy=energy, id=id, entry=entry
+              )
+              tmp["form_en"] = fen
+              # print('form_en',form_en)
+            else:
+               optim_atoms=atoms
+
+            if "bulk_modulus" in self.tasks:
+              modulus = self.ev_curve(atoms=optim_atoms, id=id, entry=entry)
+              tmp["modulus"] = modulus
+            if "elastic_tensor" in self.tasks:
+             elastic_tensor = self.elastic_tensor(
+                 atoms=optim_atoms, id=id, entry=entry
+             )
+             tmp["elastic_tensor"] = elastic_tensor
+            if "surface_formation" in self.tasks:
+             surface_energy = self.surface_energy(
+                 atoms=optim_atoms, id=id, entry=entry
+             )
+             for ii in surface_energy:
+                 if ii["surf_en_entry"] != "":
+                     surf_en_entry.append(ii["surf_en_entry"])
+                     surf_en.append(ii["surf_en"])
+             tmp["surface_energy"] = surface_energy
+            if "vacancy_formation" in self.tasks:
+             vacancy_energy = self.vacancy_energy(
+                 atoms=optim_atoms, id=id, entry=entry
+             )
+             for ii in vacancy_energy:
                 if ii["vac_en_entry"] != "":
                     vac_en_entry.append(ii["vac_en_entry"])
                     vac_en.append(ii["vac_en"])
-            tmp["vacancy_energy"] = vacancy_energy
-            if do_phonon:
+             tmp["vacancy_energy"] = vacancy_energy
+            if "phonon" in self.tasks:
                 print("Running phonon")
                 phon = self.phonons(atoms=optim_atoms, id=id)
             # tmp['phon']=phon
@@ -418,7 +429,8 @@ class Evaluator(object):
             err_vac_en = mean_absolute_error(vac_en_entry, vac_en)
             # error_dat['err_kv']=err_kv
             error_dat["err_vac_en"] = err_vac_en
-        error_dat["err_wad"] = err_wad
+        if len(wad_en):
+          error_dat["err_wad"] = err_wad
         error_dat["time"] = np.sum(np.array(timings))
         print("error_dat", error_dat)
         df = pd.DataFrame(all_dat)
@@ -968,7 +980,7 @@ class Evaluator(object):
         dataset = dataset1 + dataset2
 
         for i, ii in tqdm(df.iterrows(), total=len(df)):
-            if len(wad_en_entry) < 3:
+            # if len(wad_en_entry) < 3:
                 # if ii['Film'] in metals and ii['Subs'] in metals:
                 film_ids = []
                 subs_ids = []
@@ -1031,6 +1043,9 @@ if __name__ == "__main__":
         "JVASP-1002",  # Si
         "JVASP-1174",  # GaAs F-43m
         "JVASP-890",  # Ge
+        "JVASP-867",  # Cu
+        "JVASP-816",  # Al
+        "JVASP-41", #SiO2 P3_221
         "JVASP-8169",  # GaN F-43m
         "JVASP-8158",  # SiC F-43m
         "JVASP-1372",  # AlAs F-43m
