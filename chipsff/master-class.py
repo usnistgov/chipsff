@@ -28,7 +28,7 @@ from sevenn.sevennet_calculator import SevenNetCalculator
 from mace.calculators import mace_mp
 import elastic
 from elastic import get_elementary_deformations, get_elastic_tensor
-
+import pandas as pd
 import h5py
 import shutil
 import glob
@@ -36,47 +36,98 @@ import io
 import contextlib
 import re
 
+import plotly.express as px
+
+from sklearn.metrics import mean_absolute_error, r2_score
+from matplotlib.gridspec import GridSpec
+
 dft_3d = data("dft_3d")
-y = data("vacancydb")
+vacancydb = data("vacancydb")
 surf_url = "https://figshare.com/ndownloader/files/46355689"
-z = get_request_data(js_tag="surface_db_dd.json", url=surf_url)
-defect_ids = list(set([i["jid"] for i in y]))
-surf_ids = list(
-    set([i["name"].split("Surface-")[1].split("_miller_")[0] for i in z])
-)
-mem = []
-for i in dft_3d:
-    tmp = i
-    tmp["vacancy"] = {}
-    tmp["surface"] = {}
-    if i["jid"] in defect_ids:
-        for j in y:
-            if i["jid"] == j["jid"]:
-                tmp["vacancy"].setdefault(
-                    j["id"].split("_")[0] + "_" + j["id"].split("_")[1],
-                    j["ef"],
-                )
-                # tmp["vacancy"].setdefault(j["id"], j["ef"])
-                # Ignoring wyckoff notation
-    if i["jid"] in surf_ids:
-        for k in z:
-            jid = k["name"].split("Surface-")[1].split("_miller_")[0]
-            if i["jid"] == jid:
-                # tmp['surface'].setdefault("_".join(k["name"].split('_')[0:5]), k["surf_en"])
-                tmp["surface"].setdefault(
-                    "_".join(k["name"].split("_thickness")[0].split("_")[0:5]),
-                    k["surf_en"],
-                )
+surface_data = get_request_data(js_tag="surface_db_dd.json", url=surf_url)
 
-    mem.append(tmp)
-
-dft_3d = mem
-
-
+# Step 1: Define get_entry function to retrieve JID entry
 def get_entry(jid):
-    for i in dft_3d:
-        if i["jid"] == jid:
-            return i
+    for entry in dft_3d:
+        if entry["jid"] == jid:
+            return entry
+    raise ValueError(f"JID {jid} not found in the database")
+
+# Step 2: Collect data by combining defect and surface info
+def collect_data(dft_3d, vacancydb, surface_data):
+    defect_ids = list(set([entry["jid"] for entry in vacancydb]))
+    surf_ids = list(set([entry["name"].split("Surface-")[1].split("_miller_")[0] for entry in surface_data]))
+
+    aggregated_data = []
+    for entry in dft_3d:
+        tmp = entry
+        tmp["vacancy"] = {}
+        tmp["surface"] = {}
+
+        # Check if the entry is in the defect dataset
+        if entry["jid"] in defect_ids:
+            for vac_entry in vacancydb:
+                if entry["jid"] == vac_entry["jid"]:
+                    tmp["vacancy"].setdefault(
+                        vac_entry["id"].split("_")[0] + "_" + vac_entry["id"].split("_")[1],
+                        vac_entry["ef"]
+                    )
+
+        # Check if the entry is in the surface dataset
+        if entry["jid"] in surf_ids:
+            for surf_entry in surface_data:
+                jid = surf_entry["name"].split("Surface-")[1].split("_miller_")[0]
+                if entry["jid"] == jid:
+                    tmp["surface"].setdefault(
+                        "_".join(surf_entry["name"].split("_thickness")[0].split("_")[0:5]),
+                        surf_entry["surf_en"]
+                    )
+
+        aggregated_data.append(tmp)
+    
+    return aggregated_data
+
+def get_vacancy_energy_entry(jid, aggregated_data):
+    """
+    Retrieve the vacancy formation energy entry (vac_en_entry) for a given jid.
+    
+    Parameters:
+    jid (str): The JID of the material.
+    aggregated_data (list): The aggregated data containing vacancy and surface information.
+    
+    Returns:
+    dict: A dictionary containing the vacancy formation energy entry and corresponding symbol.
+    """
+    for entry in aggregated_data:
+        if entry["jid"] == jid:
+            vacancy_data = entry.get("vacancy", {})
+            if vacancy_data:
+                return [{"symbol": key, "vac_en_entry": value} for key, value in vacancy_data.items()]
+            else:
+                return f"No vacancy data found for JID {jid}"
+    return f"JID {jid} not found in the data."
+    
+
+def get_surface_energy_entry(jid, aggregated_data):
+    """
+    Retrieve the surface energy entry (surf_en_entry) for a given jid.
+
+    Parameters:
+    jid (str): The JID of the material.
+    aggregated_data (list): The aggregated data containing vacancy and surface information.
+
+    Returns:
+    list: A list of dictionaries containing the surface energy entry and corresponding name.
+    """
+    for entry in aggregated_data:
+        if entry["jid"] == jid:
+            surface_data = entry.get("surface", {})
+            if surface_data:
+                # Prepend 'Surface-JVASP-<jid>_' to the key for correct matching
+                return [{"name": f"{key}", "surf_en_entry": value} for key, value in surface_data.items()]
+            else:
+                return f"No surface data found for JID {jid}"
+    return f"JID {jid} not found in the data."
 
 # Utility functions
 def log_job_info(message, log_file):
@@ -117,6 +168,7 @@ def setup_calculator(calculator_type):
 class MaterialsAnalyzer:
     def __init__(self, jid, calculator_type, chemical_potentials_json):
         self.jid = jid
+        self.reference_data = get_entry(jid)
         self.calculator_type = calculator_type
         self.output_dir = f"{jid}_{calculator_type}"
         os.makedirs(self.output_dir, exist_ok=True)
@@ -124,7 +176,7 @@ class MaterialsAnalyzer:
             self.output_dir, f"{jid}_{calculator_type}_job_log.txt"
         )
         self.job_info = {"jid": jid, "calculator_type": calculator_type}
-        self.atoms = self.get_atoms(jid)  # .get_conventional_atoms
+        self.atoms = self.get_atoms(jid)#.get_conventional_atoms
         self.calculator = self.setup_calculator()
         self.chemical_potentials = json.loads(
             chemical_potentials_json
@@ -527,27 +579,26 @@ class MaterialsAnalyzer:
         """Analyze defects by generating, relaxing, and calculating vacancy formation energy."""
         self.log("Starting defect analysis...")
 
-        # Generate defect structures from the original atoms
-        defect_structures = Vacancy(self.atoms).generate_defects(
-            on_conventional_cell=True, enforce_c_size=8, extend=1
-        )
+    # Generate defect structures from the original atoms
+        defect_structures = Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1)
 
         for defect in defect_structures:
-            # Extract the defect structure and related metadata
+        # Extract the defect structure and related metadata
             defect_structure = Atoms.from_dict(defect.to_dict()["defect_structure"])
-            defect_name = f"{self.jid}_{defect_structure.composition.reduced_formula}_{defect.to_dict()['symbol']}_{defect.to_dict()['wyckoff_multiplicity']}"
+        
+        # Construct a consistent defect name without Wyckoff notation
+            element = defect.to_dict()['symbol']
+            defect_name = f"{self.jid}_{element}"  # Consistent format
             self.log(f"Analyzing defect: {defect_name}")
 
-            # Relax the defect structure
-            relaxed_defect_atoms = self.relax_defect_structure(
-                defect_structure, name=defect_name
-            )
+        # Relax the defect structure
+            relaxed_defect_atoms = self.relax_defect_structure(defect_structure, name=defect_name)
 
             if relaxed_defect_atoms is None:
                 self.log(f"Skipping {defect_name} due to failed relaxation.")
                 continue
 
-            # Retrieve energies for calculating the vacancy formation energy
+        # Retrieve energies for calculating the vacancy formation energy
             vacancy_energy = self.job_info.get(f"final_energy_defect for {defect_name}")
             bulk_energy = (
                 self.job_info.get("equilibrium_energy")
@@ -559,29 +610,23 @@ class MaterialsAnalyzer:
                 self.log(f"Skipping {defect_name} due to missing energy values.")
                 continue
 
-            # Get chemical potential and calculate vacancy formation energy
-            element = defect.to_dict()["symbol"]
+        # Get chemical potential and calculate vacancy formation energy
             chemical_potential = self.get_chemical_potential(element)
 
             if chemical_potential is None:
-                self.log(
-                    f"Skipping {defect_name} due to missing chemical potential for {element}."
-                )
+                self.log(f"Skipping {defect_name} due to missing chemical potential for {element}.")
                 continue
 
             vacancy_formation_energy = vacancy_energy - bulk_energy + chemical_potential
 
-            # Log and store the vacancy formation energy
-            self.job_info[f"vacancy_formation_energy for {defect_name}"] = (
-                vacancy_formation_energy
-            )
-            self.log(
-                f"Vacancy formation energy for {defect_name}: {vacancy_formation_energy} eV"
-            )
+        # Log and store the vacancy formation energy consistently
+            self.job_info[f"vacancy_formation_energy for {defect_name}"] = vacancy_formation_energy
+            self.log(f"Vacancy formation energy for {defect_name}: {vacancy_formation_energy} eV")
 
-        # Save the job info to a JSON file
+    # Save the job info to a JSON file
         save_dict_to_json(self.job_info, self.get_job_info_filename())
         self.log("Defect analysis completed.")
+
 
     def relax_defect_structure(self, atoms, name):
         """Relax the defect structure and log the process."""
@@ -610,9 +655,9 @@ class MaterialsAnalyzer:
         return relaxed_atoms if converged else None
 
     def analyze_surfaces(
-        self,
-        indices_list=[[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]],
-    ):
+            self,
+            indices_list=[[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]],
+        ):
         """
         Perform surface analysis by generating surface structures, relaxing them, and calculating surface energies.
         """
@@ -671,10 +716,9 @@ class MaterialsAnalyzer:
                 final_energy, bulk_energy, relaxed_surface_atoms, surface
             )
 
-            # Log and save surface energy
-            self.job_info[f"surface_energy for {self.jid} with indices {indices}"] = (
-                surface_energy
-            )
+            # Store the surface energy with the new naming convention
+            surface_name = f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}"
+            self.job_info[surface_name] = surface_energy
             self.log(
                 f"Surface energy for {self.jid} with indices {indices}: {surface_energy} J/m^2"
             )
@@ -687,6 +731,7 @@ class MaterialsAnalyzer:
             ),
         )
         self.log("Surface analysis completed.")
+
 
     def relax_surface_structure(self, atoms, indices):
         """
@@ -1215,20 +1260,235 @@ class MaterialsAnalyzer:
             self.output_dir, f"{self.jid}_{self.calculator_type}_job_info.json"
         )
 
+    import numpy as np
+    import pandas as pd
+    from sklearn.metrics import mean_absolute_error, r2_score
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    import os
+
     def run_all(self):
-        """Run all analyses in sequence."""
+        """Run all analyses in sequence and output results in the required JSON format."""
+        # Initialize lists to store errors
+        timings = []
+        error_dat = {}
+
+        # Start timing the entire run
+        start_time = time.time()
+
+        # Relax the structure
         relaxed_atoms = self.relax_structure()
-        self.calculate_ev_curve(relaxed_atoms)
-        self.calculate_elastic_tensor(relaxed_atoms)
-        self.calculate_formation_energy(relaxed_atoms)
-        self.run_phonon_analysis(relaxed_atoms)
-        self.analyze_defects()
+
+        # Lattice parameters before and after relaxation
+        lattice_initial = self.atoms.lattice
+        lattice_final = relaxed_atoms.lattice
+
+        # Bulk modulus (E-V curve)
+        _, _, _, _, bulk_modulus, _, _ = self.calculate_ev_curve(relaxed_atoms)
+        kv_entry = self.reference_data.get("bulk_modulus_kv", 0)
+
+        # Formation energy
+        formation_energy = self.calculate_formation_energy(relaxed_atoms)
+        form_en_entry = self.reference_data.get("formation_energy_peratom", 0)
+
+        # Elastic tensor
+        elastic_tensor = self.calculate_elastic_tensor(relaxed_atoms)
+        c11_entry = self.reference_data.get("elastic_tensor", [[0]])[0][0]
+        c44_entry = self.reference_data.get("elastic_tensor", [[0, 0, 0, [0, 0, 0, 0]]])[3][3]
+
+        # Surface energy analysis
         self.analyze_surfaces()
+        surf_en, surf_en_entry = [], []
+        surface_entries = get_surface_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
+
+        # Handle surface energies and skip 0 values
+        for indices in [[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]]:
+            surface_name = f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}"
+            calculated_surface_energy = self.job_info.get(surface_name, 0)
+
+            matching_entry = next((entry for entry in surface_entries if entry['name'].strip() == surface_name.strip()), None)
+
+            if matching_entry and calculated_surface_energy != 0 and matching_entry["surf_en_entry"] != 0:
+                surf_en.append(calculated_surface_energy)
+                surf_en_entry.append(matching_entry["surf_en_entry"])
+
+        # Vacancy energy analysis
+        self.analyze_defects()
+        vac_en, vac_en_entry = [], []
+        vacancy_entries = get_vacancy_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
+
+        # Handle vacancy energies and skip 0 values
+        for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1):
+            defect_name = f"{self.jid}_{defect.to_dict()['symbol']}"
+            vacancy_energy = self.job_info.get(f"vacancy_formation_energy for {defect_name}", 0)
+
+            matching_entry = next((entry for entry in vacancy_entries if entry['symbol'] == defect_name), None)
+
+            if matching_entry and vacancy_energy != 0 and matching_entry['vac_en_entry'] != 0:
+                vac_en.append(vacancy_energy)
+                vac_en_entry.append(matching_entry['vac_en_entry'])
+
+        self.run_phonon_analysis(relaxed_atoms)
         self.run_phonon3_analysis(relaxed_atoms)
         self.calculate_thermal_expansion(relaxed_atoms)
         quenched_atoms = self.general_melter(relaxed_atoms)
-        self.calculate_rdf(quenched_atoms)
-        self.log(f"All analyses completed for {self.jid}")
+        
+        # Calculate error metrics
+        err_a = mean_absolute_error([lattice_initial.a], [lattice_final.a])
+        err_b = mean_absolute_error([lattice_initial.b], [lattice_final.b])
+        err_c = mean_absolute_error([lattice_initial.c], [lattice_final.c])
+        err_form = mean_absolute_error([form_en_entry], [formation_energy])
+        err_vol = mean_absolute_error([lattice_initial.volume], [lattice_final.volume])
+        err_kv = mean_absolute_error([kv_entry], [bulk_modulus])
+        err_c11 = mean_absolute_error([c11_entry], [elastic_tensor.get("C_11", 0)])
+        err_c44 = mean_absolute_error([c44_entry], [elastic_tensor.get("C_44", 0)])
+
+        if len(surf_en) > 0:
+            err_surf_en = mean_absolute_error(surf_en_entry, surf_en)
+        else:
+            err_surf_en = 0
+
+        if len(vac_en) > 0:
+            err_vac_en = mean_absolute_error(vac_en_entry, vac_en)
+        else:
+            err_vac_en = 0
+
+        end_time = time.time()
+        total_time = end_time - start_time
+
+        # Create an error dictionary
+        error_dat["err_a"] = err_a
+        error_dat["err_b"] = err_b
+        error_dat["err_c"] = err_c
+        error_dat["err_form"] = err_form
+        error_dat["err_vol"] = err_vol
+        error_dat["err_kv"] = err_kv
+        error_dat["err_c11"] = err_c11
+        error_dat["err_c44"] = err_c44
+        error_dat["err_surf_en"] = err_surf_en
+        error_dat["err_vac_en"] = err_vac_en
+        error_dat["time"] = total_time
+
+        print("Error metrics calculated:", error_dat)
+
+        # Create a DataFrame for error data
+        df = pd.DataFrame([error_dat])
+
+        # Save the DataFrame to CSV
+        unique_dir = os.path.basename(self.output_dir)
+        fname = os.path.join(self.output_dir, f"{unique_dir}_error_dat.csv")
+        df.to_csv(fname, index=False)
+
+        # Plot the scorecard with errors
+        self.plot_error_scorecard(df)
+
+        return error_dat
+
+    def plot_error_scorecard(self, df):
+        import plotly.express as px
+
+        fig = px.imshow(df, text_auto=True, aspect="auto", labels=dict(color="Error"))
+        unique_dir = os.path.basename(self.output_dir)
+        fname_plot = os.path.join(self.output_dir, f"{unique_dir}_error_scorecard.png")
+        fig.write_image(fname_plot)
+        fig.show()
+        
+    def plot_results(self, fname):
+        df = pd.read_csv(fname)
+
+        plt.rcParams.update({"font.size": 18})
+        plt.figure(figsize=(16, 14))
+        the_grid = GridSpec(4, 3)
+
+        # Plot lattice parameter a
+        plt.subplot(the_grid[0, 0])
+        plt.scatter(df["initial_a"], df["final_a"])
+        plt.plot(df["initial_a"], df["initial_a"], c="black", linestyle="-.")
+        plt.xlabel("a-DFT ($\AA$)")
+        plt.ylabel("a-ML ($\AA$)")
+        title = "(a) " + str(round(r2_score(df["initial_a"], df["final_a"]), 2))
+        plt.title(title)
+
+        # Plot lattice parameter b
+        plt.subplot(the_grid[0, 1])
+        plt.scatter(df["initial_b"], df["final_b"])
+        plt.plot(df["initial_b"], df["initial_b"], c="black", linestyle="-.")
+        plt.xlabel("b-DFT ($\AA$)")
+        plt.ylabel("b-ML ($\AA$)")
+        title = "(b) " + str(round(r2_score(df["initial_b"], df["final_b"]), 2))
+        plt.title(title)
+
+        # Plot lattice parameter c
+        plt.subplot(the_grid[0, 2])
+        plt.scatter(df["initial_c"], df["final_c"])
+        plt.plot(df["initial_c"], df["initial_c"], c="black", linestyle="-.")
+        plt.xlabel("c-DFT ($\AA$)")
+        plt.ylabel("c-ML ($\AA$)")
+        title = "(c) " + str(round(r2_score(df["initial_c"], df["final_c"]), 2))
+        plt.title(title)
+
+        # Plot formation energy
+        plt.subplot(the_grid[1, 0])
+        plt.scatter(df["form_en_entry"], df["form_en"])
+        plt.plot(df["form_en_entry"], df["form_en_entry"], c="black", linestyle="-.")
+        plt.xlabel("$E_f$-DFT (eV/atom)")
+        plt.ylabel("$E_f$-ML (eV/atom)")
+        title = "(d) " + str(round(r2_score(df["form_en_entry"], df["form_en"]), 2))
+        plt.title(title)
+
+        # Plot volume
+        plt.subplot(the_grid[1, 1])
+        plt.scatter(df["initial_vol"], df["final_vol"])
+        plt.plot(df["initial_vol"], df["initial_vol"], c="black", linestyle="-.")
+        plt.xlabel("vol-DFT (${\AA}^3$)")
+        plt.ylabel("vol-ML (${\AA}^3$)")
+        title = "(e) " + str(round(r2_score(df["initial_vol"], df["final_vol"]), 2))
+        plt.title(title)
+
+        # Plot C11
+        plt.subplot(the_grid[1, 2])
+        plt.scatter(df["c11_entry"], df["c11"])
+        plt.plot(df["c11_entry"], df["c11_entry"], c="black", linestyle="-.")
+        plt.xlabel("$C_{11}$-DFT (GPa)")
+        plt.ylabel("$C_{11}$-ML (GPa)")
+        title = "(f) " + str(round(r2_score(df["c11_entry"], df["c11"]), 2))
+        plt.title(title)
+
+        # Plot C44
+        plt.subplot(the_grid[2, 0])
+        plt.scatter(df["c44_entry"], df["c44"])
+        plt.plot(df["c44_entry"], df["c44_entry"], c="black", linestyle="-.")
+        plt.xlabel("$C_{44}$-DFT (GPa)")
+        plt.ylabel("$C_{44}$-ML (GPa)")
+        title = "(g) " + str(round(r2_score(df["c44_entry"], df["c44"]), 2))
+        plt.title(title)
+
+        # Plot vacancy energy
+        vac_x = np.array(df["vac_en_entry"].iloc[0].split(";"), dtype=float)
+        vac_y = np.array(df["vac_en"].iloc[0].split(";"), dtype=float)
+        plt.subplot(the_grid[2, 1])
+        plt.scatter(vac_x, vac_y)
+        plt.plot(vac_x, vac_x, linestyle="-.", c="black")
+        title = "(h) " + str(round(r2_score(vac_x, vac_y), 2))
+        plt.title(title)
+        plt.xlabel("$E_{vac}$-DFT (eV)")
+        plt.ylabel("$E_{vac}$-ML (eV)")
+
+        # Plot surface energy
+        surf_x = np.array(df["surf_en_entry"].iloc[0].split(";"), dtype=float)
+        surf_y = np.array(df["surf_en"].iloc[0].split(";"), dtype=float)
+        plt.subplot(the_grid[2, 2])
+        plt.scatter(surf_x, surf_y)
+        plt.plot(surf_x, surf_x, linestyle="-.", c="black")
+        title = "(i) " + str(round(r2_score(surf_x, surf_y), 2))
+        plt.title(title)
+        plt.xlabel("$E_{surf}$-DFT (J/m2)")
+        plt.ylabel("$E_{surf}$-ML (J/m2)")
+
+        plt.tight_layout()
+        pname = fname.replace("dat.csv", "dat.png")
+        plt.savefig(pname)
+        plt.close()
 
 def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_json):
     for jid in jid_list:
@@ -1241,10 +1501,64 @@ def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_
             )
             analyzer.run_all()
 
+def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_json):
+    composite_error_data = {}
+
+    for calculator_type in calculator_types:
+        # Initialize accumulators for errors and time
+        cumulative_error = {
+            "err_a": 0, "err_b": 0, "err_c": 0,
+            "err_form": 0, "err_vol": 0,
+            "err_c11": 0, "err_c44": 0,
+            "err_surf_en": 0, "err_vac_en": 0,
+            "time": 0
+        }
+        num_materials = len(jid_list)  # Number of materials
+
+        for jid in jid_list:
+            print(f"Analyzing {jid} with {calculator_type}...")
+            analyzer = MaterialsAnalyzer(
+                jid=jid,
+                calculator_type=calculator_type,
+                chemical_potentials_json=chemical_potentials_json,
+            )
+            # Run analysis and get error data
+            error_dat = analyzer.run_all()
+
+            # Aggregate errors
+            for key in cumulative_error.keys():
+                cumulative_error[key] += error_dat[key]
+
+        # Compute average errors (if you want to average them over materials)
+        for key in cumulative_error.keys():
+            if key != "time":  # Time should be summed, not averaged
+                cumulative_error[key] /= num_materials
+
+        # Store the cumulative error data for this calculator type
+        composite_error_data[calculator_type] = cumulative_error
+
+    # Once all materials and calculators have been processed, create a DataFrame
+    composite_df = pd.DataFrame(composite_error_data).transpose()
+
+    # Plot the composite scorecard
+    plot_composite_scorecard(composite_df)
+
+    # Save the composite dataframe
+    composite_df.to_csv("composite_error_data.csv", index=True)
+
+def plot_composite_scorecard(df):
+    """Plot the composite scorecard for all calculators"""
+    fig = px.imshow(df, text_auto=True, aspect="auto", labels=dict(color="Error"))
+    fig.update_layout(title="Composite Scorecard for Calculators")
+    
+    # Save plot
+    fname_plot = "composite_error_scorecard.png"
+    fig.write_image(fname_plot)
+    fig.show()
 
 # Example usage
-jid_list = ["JVASP-1002"]
-calculator_types = ["chgnet", "mace"]
+jid_list = ["JVASP-1002","JVASP-30"]
+calculator_types = ["chgnet","mace"]
 
 chemical_potentials_json = """{
     "Eu": {
