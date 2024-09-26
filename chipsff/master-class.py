@@ -18,6 +18,7 @@ from jarvis.analysis.defects.surface import Surface
 
 from phonopy import Phonopy, PhonopyQHA
 from phonopy.file_IO import write_FORCE_CONSTANTS
+from phonopy.phonon.band_structure import BandStructure
 from phonopy.structure.atoms import Atoms as PhonopyAtoms
 from phono3py import Phono3py
 
@@ -375,12 +376,13 @@ class MaterialsAnalyzer:
 
         # Phonon generation parameters
         dim = [2, 2, 2]
-        freq_conversion_factor = 33.3566830  # THz to cm^-1
+        from phonopy.units import VaspToTHz, THzToCm
+        freq_conversion_factor = VaspToTHz * THzToCm  # Convert Phonopy units to cm^-1
         force_constants_filename = "FORCE_CONSTANTS"
         eigenvalues_filename = "phonon_eigenvalues.txt"
         thermal_props_filename = "thermal_properties.txt"
         write_fc = True
-        min_freq_tol = -0.05
+        min_freq_tol = -0.05  # in cm^-1 (since frequencies are now in cm^-1)
         distance = 0.2
 
         # Generate k-point path
@@ -389,7 +391,11 @@ class MaterialsAnalyzer:
         # Convert atoms to Phonopy-compatible object
         self.log("Converting atoms to Phonopy-compatible format...")
         bulk = relaxed_atoms.phonopy_converter()
-        phonon = Phonopy(bulk, [[dim[0], 0, 0], [0, dim[1], 0], [0, 0, dim[2]]])
+        phonon = Phonopy(
+            bulk,
+            [[dim[0], 0, 0], [0, dim[1], 0], [0, 0, dim[2]]],
+            factor=freq_conversion_factor,  # Set the frequency conversion factor
+        )
 
         # Generate displacements
         phonon.generate_displacements(distance=distance)
@@ -431,6 +437,40 @@ class MaterialsAnalyzer:
             )
             self.log(f"Force constants saved to {force_constants_filepath}")
 
+        # --- Begin modifications to enable writing band.yaml ---
+        # Prepare bands for band structure calculation
+        bands = [kpoints.kpts]  # Assuming kpoints.kpts is a list of q-points
+
+        # Prepare labels and path_connections
+        labels = []
+        path_connections = []
+        for i, label in enumerate(kpoints.labels):
+            if label:
+                labels.append(label)
+            else:
+                labels.append("")  # Empty string for points without labels
+
+        # Since we have a single path, set path_connections accordingly
+        # For a single path, path_connections is a list of True values except the last one
+        path_connections = [True] * (len(bands) - 1)
+        path_connections.append(False)
+
+        # Run band structure calculation with labels
+        self.log("Running band structure calculation...")
+        phonon.run_band_structure(
+            bands,
+            with_eigenvectors=False,
+            labels=labels,
+            path_connections=path_connections,
+        )
+
+        # Write band.yaml file
+        band_yaml_filepath = os.path.join(self.output_dir, "band.yaml")
+        self.log(f"Writing band structure data to {band_yaml_filepath}...")
+        phonon.band_structure.write_yaml(filename=band_yaml_filepath)
+        self.log(f"band.yaml saved to {band_yaml_filepath}")
+        # --- End modifications ---
+
         # Phonon band structure and eigenvalues
         lbls = kpoints.labels
         lbls_ticks = []
@@ -451,22 +491,21 @@ class MaterialsAnalyzer:
 
         for k in kpoints.kpts:
             freqs_at_k = phonon.get_frequencies(k)
-            freqs.append(freqs_at_k)
             eigenvalues.append((k, freqs_at_k))
 
-        # Write eigenvalues to file
+        # Write eigenvalues to file without manual frequency conversion
         eigenvalues_filepath = os.path.join(self.output_dir, eigenvalues_filename)
         self.log(f"Writing phonon eigenvalues to {eigenvalues_filepath}...")
         with open(eigenvalues_filepath, "w") as eig_file:
             eig_file.write("k-points\tFrequencies (cm^-1)\n")
             for k, freqs_at_k in eigenvalues:
                 k_str = ",".join(map(str, k))
-                freqs_str = "\t".join(map(str, freqs_at_k * freq_conversion_factor))
+                freqs_str = "\t".join(map(str, freqs_at_k))
                 eig_file.write(f"{k_str}\t{freqs_str}\n")
         self.log(f"Phonon eigenvalues saved to {eigenvalues_filepath}")
 
-        # Convert frequencies to numpy and apply conversion factor
-        freqs = np.array(freqs) * freq_conversion_factor
+        # Convert frequencies to numpy (already in cm^-1)
+        freqs = np.array(freqs)
 
         # Plot phonon band structure and DOS
         the_grid = plt.GridSpec(1, 2, width_ratios=[3, 1], wspace=0.0)
@@ -487,9 +526,9 @@ class MaterialsAnalyzer:
         phonon.run_mesh([40, 40, 40], is_gamma_center=True, is_mesh_symmetry=False)
         phonon.run_total_dos()
         tdos = phonon.total_dos
-        freqs_dos = np.array(tdos.frequency_points) * freq_conversion_factor
+        freqs_dos = np.array(tdos.frequency_points)  # Already in cm^-1
         dos_values = tdos.dos
-        min_freq = min_freq_tol * freq_conversion_factor
+        min_freq = min_freq_tol  # Already in cm^-1
         max_freq = max(freqs_dos)
 
         plt.ylim([min_freq, max_freq])
