@@ -1355,15 +1355,25 @@ class MaterialsAnalyzer:
         vac_en, vac_en_entry = [], []
         vacancy_entries = get_vacancy_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
 
-        # Handle vacancy energies and skip 0 values
         for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1):
             defect_name = f"{self.jid}_{defect.to_dict()['symbol']}"
             vacancy_energy = self.job_info.get(f"vacancy_formation_energy for {defect_name}", 0)
-            matching_entry = next((entry for entry in vacancy_entries if entry['symbol'] == defect_name), None)
 
-            if matching_entry and vacancy_energy != 0 and matching_entry['vac_en_entry'] != 0:
-                vac_en.append(vacancy_energy)
-                vac_en_entry.append(matching_entry['vac_en_entry'])
+            try:
+                # Try to match the vacancy entry
+                matching_entry = next((entry for entry in vacancy_entries if entry['symbol'] == defect_name), None)
+
+                if matching_entry and vacancy_energy != 0 and matching_entry['vac_en_entry'] != 0:
+                    vac_en.append(vacancy_energy)
+                    vac_en_entry.append(matching_entry['vac_en_entry'])
+                else:
+                    print(f"No valid matching entry found for {defect_name}")
+            except Exception as e:
+                # Handle the exception, log it, and continue
+                print(f"Error processing defect {defect_name}: {e}")
+                # Optionally log more details or store the error for later inspection
+                self.log(f"Error processing defect {defect_name}: {str(e)}")
+                continue  # Skip this defect and move to the next one
 
         # Phonon and zero-point energy
         phonon, zpe = self.run_phonon_analysis(relaxed_atoms)
