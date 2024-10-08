@@ -1308,7 +1308,7 @@ class MaterialsAnalyzer:
 
     def run_all(self):
         """Run all analyses in sequence and output results in the required JSON format."""
-        # Initialize lists to store errors
+        # Initialize lists to store errors and other data
         timings = []
         error_dat = {}
 
@@ -1344,7 +1344,6 @@ class MaterialsAnalyzer:
         for indices in [[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]]:
             surface_name = f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}"
             calculated_surface_energy = self.job_info.get(surface_name, 0)
-
             matching_entry = next((entry for entry in surface_entries if entry['name'].strip() == surface_name.strip()), None)
 
             if matching_entry and calculated_surface_energy != 0 and matching_entry["surf_en_entry"] != 0:
@@ -1360,18 +1359,66 @@ class MaterialsAnalyzer:
         for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1):
             defect_name = f"{self.jid}_{defect.to_dict()['symbol']}"
             vacancy_energy = self.job_info.get(f"vacancy_formation_energy for {defect_name}", 0)
-
             matching_entry = next((entry for entry in vacancy_entries if entry['symbol'] == defect_name), None)
 
             if matching_entry and vacancy_energy != 0 and matching_entry['vac_en_entry'] != 0:
                 vac_en.append(vacancy_energy)
                 vac_en_entry.append(matching_entry['vac_en_entry'])
 
-        self.run_phonon_analysis(relaxed_atoms)
-        self.run_phonon3_analysis(relaxed_atoms)
-        self.calculate_thermal_expansion(relaxed_atoms)
-        quenched_atoms = self.general_melter(relaxed_atoms)
-        
+        # Phonon and zero-point energy
+        phonon, zpe = self.run_phonon_analysis(relaxed_atoms)
+        #self.run_phonon3_analysis(relaxed_atoms)
+        #self.calculate_thermal_expansion(relaxed_atoms)
+        #quenched_atoms = self.general_melter(relaxed_atoms)
+
+        # Create final results dictionary
+        final_results = {
+            "energy": {
+                "initial_a": lattice_initial.a,
+                "initial_b": lattice_initial.b,
+                "initial_c": lattice_initial.c,
+                "initial_vol": lattice_initial.volume,
+                "final_a": lattice_final.a,
+                "final_b": lattice_final.b,
+                "final_c": lattice_final.c,
+                "final_vol": lattice_final.volume,
+                "energy": self.job_info.get("final_energy_structure", 0)
+            },
+            "form_en": {
+                "form_energy": formation_energy,
+                "form_energy_entry": form_en_entry
+            },
+            "elastic_tensor": {
+                "c11": elastic_tensor.get("C_11", 0),
+                "c44": elastic_tensor.get("C_44", 0),
+                "c11_entry": c11_entry,
+                "c44_entry": c44_entry
+            },
+            "modulus": {
+                "kv": bulk_modulus,
+                "kv_entry": kv_entry
+            },
+            "surface_energy": [
+                {"name": f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}", 
+                 "surf_en": se, 
+                 "surf_en_entry": see} 
+                for se, see, indices in zip(surf_en, surf_en_entry, [[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]])
+            ],
+            "vacancy_energy": [
+                {"name": ve_name, "vac_en": ve, "vac_en_entry": vee}
+                for ve_name, ve, vee in zip(
+                    [f"{self.jid}_{defect.to_dict()['symbol']}" for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1)], 
+                    vac_en, 
+                    vac_en_entry
+                )
+            ],
+            "zpe": zpe
+        }
+
+        # Write results to a JSON file
+        output_file = os.path.join(self.output_dir, f"{self.jid}_{self.calculator_type}_results.json")
+        save_dict_to_json(final_results, output_file)
+
         # Calculate error metrics
         err_a = mean_absolute_error([lattice_initial.a], [lattice_final.a])
         err_b = mean_absolute_error([lattice_initial.b], [lattice_final.b])
@@ -1382,31 +1429,26 @@ class MaterialsAnalyzer:
         err_c11 = mean_absolute_error([c11_entry], [elastic_tensor.get("C_11", 0)])
         err_c44 = mean_absolute_error([c44_entry], [elastic_tensor.get("C_44", 0)])
 
-        if len(surf_en) > 0:
-            err_surf_en = mean_absolute_error(surf_en_entry, surf_en)
-        else:
-            err_surf_en = 0
-
-        if len(vac_en) > 0:
-            err_vac_en = mean_absolute_error(vac_en_entry, vac_en)
-        else:
-            err_vac_en = 0
+        err_surf_en = mean_absolute_error(surf_en_entry, surf_en) if surf_en else 0
+        err_vac_en = mean_absolute_error(vac_en_entry, vac_en) if vac_en else 0
 
         end_time = time.time()
         total_time = end_time - start_time
 
         # Create an error dictionary
-        error_dat["err_a"] = err_a
-        error_dat["err_b"] = err_b
-        error_dat["err_c"] = err_c
-        error_dat["err_form"] = err_form
-        error_dat["err_vol"] = err_vol
-        error_dat["err_kv"] = err_kv
-        error_dat["err_c11"] = err_c11
-        error_dat["err_c44"] = err_c44
-        error_dat["err_surf_en"] = err_surf_en
-        error_dat["err_vac_en"] = err_vac_en
-        error_dat["time"] = total_time
+        error_dat = {
+            "err_a": err_a,
+            "err_b": err_b,
+            "err_c": err_c,
+            "err_form": err_form,
+            "err_vol": err_vol,
+            "err_kv": err_kv,
+            "err_c11": err_c11,
+            "err_c44": err_c44,
+            "err_surf_en": err_surf_en,
+            "err_vac_en": err_vac_en,
+            "time": total_time
+        }
 
         print("Error metrics calculated:", error_dat)
 
