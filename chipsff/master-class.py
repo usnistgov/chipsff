@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import numpy as np
@@ -41,6 +42,9 @@ import plotly.express as px
 
 from sklearn.metrics import mean_absolute_error, r2_score
 from matplotlib.gridspec import GridSpec
+
+import argparse
+
 
 dft_3d = data("dft_3d")
 vacancydb = data("vacancydb")
@@ -155,6 +159,51 @@ def setup_calculator(calculator_type):
             force_multiplier=1,
             modl_filename="best_model.pt",
         )
+    elif calculator_type == "alignn_ff_aff307k_kNN_2_2_128":
+        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/aff307k_kNN_2_2_128"
+        return AlignnAtomwiseCalculator(
+            path=model_path,
+            stress_wt=0.3,
+            #force_mult_natoms=True,
+            #force_multiplier=1,
+            model_filename="best_model.pt",
+        )
+    elif calculator_type == "alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4":
+        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4"
+        return AlignnAtomwiseCalculator(
+            path=model_path,
+            stress_wt=0.3,
+            #force_mult_natoms=True,
+            #force_multiplier=1,
+            model_filename="best_model.pt",
+        )
+    elif calculator_type == "alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4":
+        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4"
+        return AlignnAtomwiseCalculator(
+            path=model_path,
+            stress_wt=0.3,
+            #force_mult_natoms=True,
+            #force_multiplier=1,
+            model_filename="best_model.pt",
+        )
+    elif calculator_type == "alignn_ff_v5.27.2024":
+        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/v5.27.2024"
+        return AlignnAtomwiseCalculator(
+            path=model_path,
+            stress_wt=0.3,
+            #force_mult_natoms=True,
+            #force_multiplier=1,
+            model_filename="best_model.pt",
+        )
+    elif calculator_type == "alignn_ff_alignnff_wt10":
+        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/alignnff_wt10"
+        return AlignnAtomwiseCalculator(
+            path=model_path,
+            stress_wt=0.3,
+            #force_mult_natoms=True,
+            #force_multiplier=1,
+            modl_filename="best_model.pt",
+        )
     elif calculator_type == "chgnet":
         return CHGNetCalculator()
     elif calculator_type == "mace":
@@ -167,7 +216,7 @@ def setup_calculator(calculator_type):
 
 
 class MaterialsAnalyzer:
-    def __init__(self, jid, calculator_type, chemical_potentials_json):
+    def __init__(self, jid, calculator_type, chemical_potentials_file):
         self.jid = jid
         self.reference_data = get_entry(jid)
         self.calculator_type = calculator_type
@@ -179,9 +228,8 @@ class MaterialsAnalyzer:
         self.job_info = {"jid": jid, "calculator_type": calculator_type}
         self.atoms = self.get_atoms(jid)#.get_conventional_atoms
         self.calculator = self.setup_calculator()
-        self.chemical_potentials = json.loads(
-            chemical_potentials_json
-        )  # Load chemical potentials from the provided JSON
+        self.chemical_potentials_file = chemical_potentials_file
+        self.chemical_potentials = self.load_chemical_potentials() 
 
     def log(self, message):
         log_job_info(message, self.log_file)
@@ -194,6 +242,17 @@ class MaterialsAnalyzer:
         calc = setup_calculator(self.calculator_type)
         self.log(f"Using calculator: {self.calculator_type}")
         return calc
+
+    def load_chemical_potentials(self):
+        if os.path.exists(self.chemical_potentials_file):
+            with open(self.chemical_potentials_file, "r") as f:
+                return json.load(f)
+        else:
+            return {}
+
+    def save_chemical_potentials(self):
+        with open(self.chemical_potentials_file, "w") as f:
+            json.dump(self.chemical_potentials, f, indent=4)
 
     def capture_fire_output(self, ase_atoms, fmax, steps):
         """Capture the output of the FIRE optimizer."""
@@ -247,30 +306,71 @@ class MaterialsAnalyzer:
         """
         e0 = self.job_info["equilibrium_energy"]
         composition = relaxed_atoms.composition.to_dict()
-        chemical_potentials = (
-            self.chemical_potentials
-        )  # Use the loaded chemical potentials from the class initialization
-
         total_energy = e0
+
         for element, amount in composition.items():
-            # Lookup chemical potential for each element
-            chemical_potential = chemical_potentials.get(element, {}).get(
-                f"energy_{self.calculator_type}", 0
-            )
-            if chemical_potential == 0:
-                self.log(
-                    f"Warning: No chemical potential found for {element} with calculator {self.calculator_type}"
-                )
+            chemical_potential = self.get_chemical_potential(element)
+            if chemical_potential is None:
+                self.log(f"Skipping formation energy calculation due to missing chemical potential for {element}.")
+                continue  # Or handle this appropriately
             total_energy -= chemical_potential * amount
 
         formation_energy_per_atom = total_energy / relaxed_atoms.num_atoms
 
-        # Log and save the formation energy
+    # Log and save the formation energy
         self.job_info["formation_energy_per_atom"] = formation_energy_per_atom
         self.log(f"Formation energy per atom: {formation_energy_per_atom}")
         save_dict_to_json(self.job_info, self.get_job_info_filename())
 
         return formation_energy_per_atom
+
+    def calculate_element_chemical_potential(self, element, element_jid):
+        """
+        Calculate the chemical potential of a pure element using its standard structure.
+        """
+        self.log(f"Calculating chemical potential for element: {element} using JID: {element_jid}")
+        try:
+            # Get standard structure for the element using the provided JID
+            element_atoms = self.get_atoms(element_jid)
+            ase_atoms = element_atoms.ase_converter()
+            ase_atoms.calc = self.calculator
+
+            # Perform energy calculation
+            energy = ase_atoms.get_potential_energy() / len(ase_atoms)
+            self.log(f"Calculated chemical potential for {element}: {energy} eV/atom")
+            return energy
+        except Exception as e:
+            self.log(f"Error calculating chemical potential for {element}: {e}")
+            return None
+
+    def get_chemical_potential(self, element):
+        """Fetch chemical potential from JSON based on the element and calculator."""
+        element_data = self.chemical_potentials.get(element, {})
+        chemical_potential = element_data.get(f"energy_{self.calculator_type}")
+
+        if chemical_potential is None:
+            self.log(
+                f"No chemical potential found for {element} with calculator {self.calculator_type}, calculating it now..."
+            )
+            # Get standard JID for the element from chemical_potentials.json
+            element_jid = element_data.get("jid")
+            if element_jid is None:
+                self.log(f"No standard JID found for element {element} in chemical_potentials.json")
+                return None  # Skip this element
+
+            # Calculate chemical potential
+            chemical_potential = self.calculate_element_chemical_potential(element, element_jid)
+            if chemical_potential is None:
+                self.log(f"Failed to calculate chemical potential for {element}")
+                return None
+            # Add it to the chemical potentials dictionary
+            if element not in self.chemical_potentials:
+                self.chemical_potentials[element] = {}
+            self.chemical_potentials[element][f"energy_{self.calculator_type}"] = chemical_potential
+            # Save the updated chemical potentials to file
+            self.save_chemical_potentials()
+
+        return chemical_potential
 
     def calculate_ev_curve(self, relaxed_atoms):
         """Calculate the energy-volume (E-V) curve and log results."""
@@ -297,41 +397,49 @@ class MaterialsAnalyzer:
         vol = np.array(vol)
 
         # Fit the E-V curve using an equation of state (EOS)
-        eos = EquationOfState(vol, y, eos="murnaghan")
-        v0, e0, B = eos.fit()
+        try:
+            eos = EquationOfState(vol, y, eos="murnaghan")
+            v0, e0, B = eos.fit()
 
-        # Bulk modulus in GPa (conversion factor from ASE units)
-        kv = B / kJ * 1.0e24  # Convert to GPa
+            # Bulk modulus in GPa (conversion factor from ASE units)
+            kv = B / kJ * 1.0e24  # Convert to GPa
 
-        # Log important results
-        self.log(f"Bulk modulus: {kv} GPa")
-        self.log(f"Equilibrium energy: {e0} eV")
-        self.log(f"Equilibrium volume: {v0} Å³")
+            # Log important results
+            self.log(f"Bulk modulus: {kv} GPa")
+            self.log(f"Equilibrium energy: {e0} eV")
+            self.log(f"Equilibrium volume: {v0} Å³")
 
-        # Save E-V curve plot
-        fig = plt.figure()
-        eos.plot()
-        ev_plot_filename = os.path.join(self.output_dir, "E_vs_V_curve.png")
-        fig.savefig(ev_plot_filename)
-        plt.close(fig)
-        self.log(f"E-V curve plot saved to {ev_plot_filename}")
+            # Save E-V curve plot
+            fig = plt.figure()
+            eos.plot()
+            ev_plot_filename = os.path.join(self.output_dir, "E_vs_V_curve.png")
+            fig.savefig(ev_plot_filename)
+            plt.close(fig)
+            self.log(f"E-V curve plot saved to {ev_plot_filename}")
 
-        # Save E-V curve data to a text file
-        ev_data_filename = os.path.join(self.output_dir, "E_vs_V_data.txt")
-        with open(ev_data_filename, "w") as f:
-            f.write("Volume (Å³)\tEnergy (eV)\n")
-            for v, e in zip(vol, y):
-                f.write(f"{v}\t{e}\n")
-        self.log(f"E-V curve data saved to {ev_data_filename}")
+            # Save E-V curve data to a text file
+            ev_data_filename = os.path.join(self.output_dir, "E_vs_V_data.txt")
+            with open(ev_data_filename, "w") as f:
+                f.write("Volume (Å³)\tEnergy (eV)\n")
+                for v, e in zip(vol, y):
+                    f.write(f"{v}\t{e}\n")
+            self.log(f"E-V curve data saved to {ev_data_filename}")
 
-        # Update job info with the results
-        self.job_info["bulk_modulus"] = kv
-        self.job_info["equilibrium_energy"] = e0
-        self.job_info["equilibrium_volume"] = v0
-        save_dict_to_json(self.job_info, self.get_job_info_filename())
+            # Update job info with the results
+            self.job_info["bulk_modulus"] = kv
+            self.job_info["equilibrium_energy"] = e0
+            self.job_info["equilibrium_volume"] = v0
+            save_dict_to_json(self.job_info, self.get_job_info_filename())
+
+        except RuntimeError as e:
+            self.log(f"Error fitting EOS for {self.jid}: {e}")
+            self.log("Skipping bulk modulus calculation due to fitting error.")
+            kv = None  # Set bulk modulus to None or handle this as you wish
+            e0, v0 = None, None  # Set equilibrium energy and volume to None
 
         # Return additional values for thermal expansion analysis
         return vol, y, strained_structures, eos, kv, e0, v0
+
 
     def calculate_elastic_tensor(self, relaxed_atoms):
         """
@@ -368,6 +476,9 @@ class MaterialsAnalyzer:
         save_dict_to_json(self.job_info, self.get_job_info_filename())
 
         return elastic_tensor
+
+
+
 
     def run_phonon_analysis(self, relaxed_atoms):
         """Perform Phonon calculation, generate force constants, and plot band structure & DOS."""
@@ -633,6 +744,11 @@ class MaterialsAnalyzer:
 
         return phonon, zpe
 
+
+
+
+   
+
     def analyze_defects(self):
         """Analyze defects by generating, relaxing, and calculating vacancy formation energy."""
         self.log("Starting defect analysis...")
@@ -709,6 +825,12 @@ class MaterialsAnalyzer:
         # Update job info with the final energy and convergence status
         self.job_info[f"final_energy_defect for {name}"] = final_energy
         self.job_info[f"converged for {name}"] = converged
+
+        if converged:
+            poscar_filename = os.path.join(self.output_dir, f"POSCAR_{name}_relaxed.vasp")
+            poscar_defect = Poscar(relaxed_atoms)
+            poscar_defect.write_file(poscar_filename)
+            self.log(f"Relaxed defect structure saved to {poscar_filename}")
 
         return relaxed_atoms if converged else None
 
@@ -1301,18 +1423,6 @@ class MaterialsAnalyzer:
         supercell_dims = [max(1, scale) for scale in scale_factors]
         return supercell_dims
 
-    def get_chemical_potential(self, element):
-        """Fetch chemical potential from JSON based on the element and calculator."""
-        if element in self.chemical_potentials:
-            return self.chemical_potentials[element].get(
-                f"energy_{self.calculator_type}", 0
-            )
-        else:
-            self.log(
-                f"Warning: No chemical potential data found for element: {element}"
-            )
-            return 0
-
     def get_job_info_filename(self):
         return os.path.join(
             self.output_dir, f"{self.jid}_{self.calculator_type}_job_info.json"
@@ -1353,27 +1463,40 @@ class MaterialsAnalyzer:
         elastic_tensor = self.calculate_elastic_tensor(relaxed_atoms)
         c11_entry = self.reference_data.get("elastic_tensor", [[0]])[0][0]
         c44_entry = self.reference_data.get("elastic_tensor", [[0, 0, 0, [0, 0, 0, 0]]])[3][3]
-
+        phonon, zpe = self.run_phonon_analysis(relaxed_atoms)
         # Surface energy analysis
         self.analyze_surfaces()
         surf_en, surf_en_entry = [], []
         surface_entries = get_surface_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
 
-        # Handle surface energies and skip 0 values
         for indices in [[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]]:
             surface_name = f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}"
             calculated_surface_energy = self.job_info.get(surface_name, 0)
-            matching_entry = next((entry for entry in surface_entries if entry['name'].strip() == surface_name.strip()), None)
 
-            if matching_entry and calculated_surface_energy != 0 and matching_entry["surf_en_entry"] != 0:
-                surf_en.append(calculated_surface_energy)
-                surf_en_entry.append(matching_entry["surf_en_entry"])
+            try:
+                # Try to match the surface entry
+                matching_entry = next((entry for entry in surface_entries if entry['name'].strip() == surface_name.strip()), None)
+
+                if matching_entry and calculated_surface_energy != 0 and matching_entry["surf_en_entry"] != 0:
+                    surf_en.append(calculated_surface_energy)
+                    surf_en_entry.append(matching_entry["surf_en_entry"])
+                else:
+                    print(f"No valid matching entry found for {surface_name}")
+            except Exception as e:
+                # Handle the exception, log it, and continue
+                print(f"Error processing surface {surface_name}: {e}")
+                # Optionally log more details or store the error for later inspection
+                self.log(f"Error processing surface {surface_name}: {str(e)}")
+                continue  # Skip this surface and move to the next one
+
 
         # Vacancy energy analysis
         self.analyze_defects()
         vac_en, vac_en_entry = [], []
         vacancy_entries = get_vacancy_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
 
+
+        # Assuming this is the part where you encounter the issue
         for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1):
             defect_name = f"{self.jid}_{defect.to_dict()['symbol']}"
             vacancy_energy = self.job_info.get(f"vacancy_formation_energy for {defect_name}", 0)
@@ -1394,8 +1517,13 @@ class MaterialsAnalyzer:
                 self.log(f"Error processing defect {defect_name}: {str(e)}")
                 continue  # Skip this defect and move to the next one
 
+
+
+
+
+
         # Phonon and zero-point energy
-        phonon, zpe = self.run_phonon_analysis(relaxed_atoms)
+        
         #self.run_phonon3_analysis(relaxed_atoms)
         #self.calculate_thermal_expansion(relaxed_atoms)
         #quenched_atoms = self.general_melter(relaxed_atoms)
@@ -1454,17 +1582,17 @@ class MaterialsAnalyzer:
         err_c = mean_absolute_error([lattice_initial.c], [lattice_final.c])
         err_form = mean_absolute_error([form_en_entry], [formation_energy])
         err_vol = mean_absolute_error([lattice_initial.volume], [lattice_final.volume])
-        err_kv = mean_absolute_error([kv_entry], [bulk_modulus])
-        err_c11 = mean_absolute_error([c11_entry], [elastic_tensor.get("C_11", 0)])
-        err_c44 = mean_absolute_error([c44_entry], [elastic_tensor.get("C_44", 0)])
+        err_kv = mean_absolute_error([kv_entry], [bulk_modulus]) if bulk_modulus is not None else np.nan
+        err_c11 = mean_absolute_error([c11_entry], [elastic_tensor.get("C_11", np.nan)])
+        err_c44 = mean_absolute_error([c44_entry], [elastic_tensor.get("C_44", np.nan)])
 
-        err_surf_en = mean_absolute_error(surf_en_entry, surf_en) if surf_en else 0
-        err_vac_en = mean_absolute_error(vac_en_entry, vac_en) if vac_en else 0
+        err_surf_en = mean_absolute_error(surf_en_entry, surf_en) if surf_en else np.nan
+        err_vac_en = mean_absolute_error(vac_en_entry, vac_en) if vac_en else np.nan
 
         end_time = time.time()
         total_time = end_time - start_time
 
-        # Create an error dictionary
+# Create an error dictionary
         error_dat = {
             "err_a": err_a,
             "err_b": err_b,
@@ -1481,18 +1609,20 @@ class MaterialsAnalyzer:
 
         print("Error metrics calculated:", error_dat)
 
-        # Create a DataFrame for error data
+# Create a DataFrame for error data
         df = pd.DataFrame([error_dat])
 
-        # Save the DataFrame to CSV
+# Save the DataFrame to CSV
         unique_dir = os.path.basename(self.output_dir)
         fname = os.path.join(self.output_dir, f"{unique_dir}_error_dat.csv")
         df.to_csv(fname, index=False)
 
-        # Plot the scorecard with errors
+# Plot the scorecard with errors
         self.plot_error_scorecard(df)
 
         return error_dat
+
+
 
     def plot_error_scorecard(self, df):
         import plotly.express as px
@@ -1600,52 +1730,34 @@ class MaterialsAnalyzer:
         plt.savefig(pname)
         plt.close()
 
-def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_json):
-    for jid in jid_list:
-        for calculator_type in calculator_types:
-            print(f"Analyzing {jid} with {calculator_type}...")
-            analyzer = MaterialsAnalyzer(
-                jid=jid,
-                calculator_type=calculator_type,
-                chemical_potentials_json=chemical_potentials_json,
-            )
-            analyzer.run_all()
 
-def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_json):
+def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_file):
     composite_error_data = {}
 
     for calculator_type in calculator_types:
-        # Initialize accumulators for errors and time
-        cumulative_error = {
-            "err_a": 0, "err_b": 0, "err_c": 0,
-            "err_form": 0, "err_vol": 0,
-            "err_c11": 0, "err_c44": 0,
-            "err_surf_en": 0, "err_vac_en": 0,
-            "time": 0
-        }
-        num_materials = len(jid_list)  # Number of materials
+        # List to store individual error DataFrames
+        error_dfs = []
 
         for jid in jid_list:
             print(f"Analyzing {jid} with {calculator_type}...")
             analyzer = MaterialsAnalyzer(
                 jid=jid,
                 calculator_type=calculator_type,
-                chemical_potentials_json=chemical_potentials_json,
+                chemical_potentials_file=chemical_potentials_file,
             )
             # Run analysis and get error data
             error_dat = analyzer.run_all()
+            error_df = pd.DataFrame([error_dat])
+            error_dfs.append(error_df)
 
-            # Aggregate errors
-            for key in cumulative_error.keys():
-                cumulative_error[key] += error_dat[key]
+        # Concatenate all error DataFrames
+        all_errors_df = pd.concat(error_dfs, ignore_index=True)
 
-        # Compute average errors (if you want to average them over materials)
-        for key in cumulative_error.keys():
-            if key != "time":  # Time should be summed, not averaged
-                cumulative_error[key] /= num_materials
+        # Compute composite errors by ignoring NaN values
+        composite_error = all_errors_df.mean(skipna=True).to_dict()
 
-        # Store the cumulative error data for this calculator type
-        composite_error_data[calculator_type] = cumulative_error
+        # Store the composite error data for this calculator type
+        composite_error_data[calculator_type] = composite_error
 
     # Once all materials and calculators have been processed, create a DataFrame
     composite_df = pd.DataFrame(composite_error_data).transpose()
@@ -1656,6 +1768,7 @@ def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_
     # Save the composite dataframe
     composite_df.to_csv("composite_error_data.csv", index=True)
 
+
 def plot_composite_scorecard(df):
     """Plot the composite scorecard for all calculators"""
     fig = px.imshow(df, text_auto=True, aspect="auto", labels=dict(color="Error"))
@@ -1665,684 +1778,71 @@ def plot_composite_scorecard(df):
     fname_plot = "composite_error_scorecard.png"
     fig.write_image(fname_plot)
     fig.show()
+#jid_list=['JVASP-1002']
+jid_list_all = [ 'JVASP-1002', 'JVASP-816', 'JVASP-867', 'JVASP-1029', 'JVASP-861','JVASP-30', 'JVASP-8169', 'JVASP-890', 'JVASP-8158','JVASP-8118',
+    'JVASP-107', 'JVASP-39', 'JVASP-7844', 'JVASP-35106', 'JVASP-1174',
+    'JVASP-1372', 'JVASP-91', 'JVASP-1186', 'JVASP-1408', 'JVASP-105410',
+    'JVASP-1177', 'JVASP-79204', 'JVASP-1393', 'JVASP-1312', 'JVASP-1327',
+    'JVASP-1183', 'JVASP-1192', 'JVASP-8003', 'JVASP-96', 'JVASP-1198',
+    'JVASP-1195', 'JVASP-9147', 'JVASP-41', 'JVASP-34674', 'JVASP-113',
+    'JVASP-32', 'JVASP-840', 'JVASP-21195', 'JVASP-981', 'JVASP-969',
+    'JVASP-802', 'JVASP-943', 'JVASP-14812', 'JVASP-984', 'JVASP-972',
+    'JVASP-958', 'JVASP-901', 'JVASP-1702', 'JVASP-931', 'JVASP-963',
+    'JVASP-95', 'JVASP-1201', 'JVASP-14837', 'JVASP-825', 'JVASP-966',
+    'JVASP-993', 'JVASP-23', 'JVASP-828', 'JVASP-1189', 'JVASP-810',
+    'JVASP-7630', 'JVASP-819', 'JVASP-1180', 'JVASP-837', 'JVASP-919',
+    'JVASP-7762', 'JVASP-934', 'JVASP-858', 'JVASP-895']
+#calculator_types = ["alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4","alignn_ff_v5.27.2024","alignn_ff_aff307k_kNN_2_2_128"]
 
-# Example usage
-jid_list = ["JVASP-1002","JVASP-30"]
-calculator_types = ["chgnet","mace"]
+import argparse
 
-chemical_potentials_json = """{
-    "Eu": {
-        "jid": "JVASP-88846",
-        "energy_alignn_ff": -1.959056,
-        "energy_chgnet": -10.253422,
-        "energy_matgl": -10.171406,
-        "energy_mace": -10.2523955,
-        "energy_sevennet": -10.2651205
-    },
-    "Ru": {
-        "jid": "JVASP-987",
-        "energy_alignn_ff": -4.911544,
-        "energy_chgnet": -9.140766,
-        "energy_matgl": -9.2708045,
-        "energy_mace": -9.2447245,
-        "energy_sevennet": -9.26455
-    },
-    "Re": {
-        "jid": "JVASP-981",
-        "energy_alignn_ff": -7.9723265,
-        "energy_chgnet": -12.457021,
-        "energy_matgl": -12.454343,
-        "energy_mace": -12.443777,
-        "energy_sevennet": -12.441499
-    },
-    "Rb": {
-        "jid": "JVASP-25388",
-        "energy_alignn_ff": 1.2639575,
-        "energy_chgnet": -0.96709,
-        "energy_matgl": -0.945327,
-        "energy_mace": -0.947626,
-        "energy_sevennet": -0.9447955
-    },
-    "Rh": {
-        "jid": "JVASP-984",
-        "energy_alignn_ff": -2.738144,
-        "energy_chgnet": -7.300445,
-        "energy_matgl": -7.390478,
-        "energy_mace": -7.290643,
-        "energy_sevennet": -7.341245
-    },
-    "Be": {
-        "jid": "JVASP-834",
-        "energy_alignn_ff": -1.172956,
-        "energy_chgnet": -3.7293225,
-        "energy_matgl": -3.6833285,
-        "energy_mace": -3.7484385,
-        "energy_sevennet": -3.7126385
-    },
-    "Ba": {
-        "jid": "JVASP-14604",
-        "energy_alignn_ff": 0.504432,
-        "energy_chgnet": -1.882994,
-        "energy_matgl": -1.884151,
-        "energy_mace": -1.862737,
-        "energy_sevennet": -1.823505
-    },
-    "Bi": {
-        "jid": "JVASP-837",
-        "energy_alignn_ff": -1.1796125,
-        "energy_chgnet": -3.8214735,
-        "energy_matgl": -3.8210865,
-        "energy_mace": -3.8594375,
-        "energy_sevennet": -3.860356
-    },
-    "Br": {
-        "jid": "JVASP-840",
-        "energy_alignn_ff": 0.111092,
-        "energy_chgnet": -1.6219065,
-        "energy_matgl": -1.57035975,
-        "energy_mace": -1.918754,
-        "energy_sevennet": -1.63592475
-    },
-    "H": {
-        "jid": "JVASP-25379",
-        "energy_alignn_ff": -3.390353,
-        "energy_chgnet": -3.372895,
-        "energy_matgl": -3.41707,
-        "energy_mace": -3.35942325,
-        "energy_sevennet": -3.3967095
-    },
-    "P": {
-        "jid": "JVASP-25144",
-        "energy_alignn_ff": -3.936694,
-        "energy_chgnet": -5.403327,
-        "energy_matgl": -5.35841075,
-        "energy_mace": -5.41365725,
-        "energy_sevennet": -5.3782965
-    },
-    "Os": {
-        "jid": "JVASP-14744",
-        "energy_alignn_ff": -6.7488375,
-        "energy_chgnet": -11.17282,
-        "energy_matgl": -11.2222565,
-        "energy_mace": -11.208637,
-        "energy_sevennet": -11.2106325
-    },
-    "Ge": {
-        "jid": "JVASP-890",
-        "energy_alignn_ff": -0.9296625,
-        "energy_chgnet": -4.456685,
-        "energy_matgl": -4.5874235,
-        "energy_mace": -4.5258085,
-        "energy_sevennet": -4.577574
-    },
-    "Ga": {
-        "jid": "JVASP-14622",
-        "energy_alignn_ff": 0.651836,
-        "energy_chgnet": -3.01915925,
-        "energy_matgl": -3.02938625,
-        "energy_mace": -3.029211,
-        "energy_sevennet": -3.0231815
-    },
-    "Pr": {
-        "jid": "JVASP-969",
-        "energy_alignn_ff": -2.2528295,
-        "energy_chgnet": -4.7477165,
-        "energy_matgl": -4.74495175,
-        "energy_mace": -4.779047,
-        "energy_sevennet": -4.763914
-    },
-    "Pt": {
-        "jid": "JVASP-972",
-        "energy_alignn_ff": -2.918793,
-        "energy_chgnet": -6.092452,
-        "energy_matgl": -6.084422,
-        "energy_mace": -6.0348,
-        "energy_sevennet": -6.059916
-    },
-    "Pu": {
-        "jid": "JVASP-25254",
-        "energy_alignn_ff": -9.9656085,
-        "energy_chgnet": -14.2657575,
-        "energy_matgl": -14.262664,
-        "energy_mace": -14.1881525,
-        "energy_sevennet": -14.259139
-    },
-    "C": {
-        "jid": "JVASP-25407",
-        "energy_alignn_ff": -6.86239725,
-        "energy_chgnet": -9.180709,
-        "energy_matgl": -9.15409575,
-        "energy_mace": -9.21273225,
-        "energy_sevennet": -9.21711925
-    },
-    "Pb": {
-        "jid": "JVASP-961",
-        "energy_alignn_ff": -0.271016,
-        "energy_chgnet": -3.663821,
-        "energy_matgl": -3.708089,
-        "energy_mace": -3.696473,
-        "energy_sevennet": -3.692711
-    },
-    "Pa": {
-        "jid": "JVASP-958",
-        "energy_alignn_ff": -6.305937,
-        "energy_chgnet": -9.436422,
-        "energy_matgl": -9.488003,
-        "energy_mace": -9.385218,
-        "energy_sevennet": -9.485789
-    },
-    "Pd": {
-        "jid": "JVASP-963",
-        "energy_alignn_ff": -1.464927,
-        "energy_chgnet": -5.202854,
-        "energy_matgl": -5.16607,
-        "energy_mace": -5.187269,
-        "energy_sevennet": -5.187177
-    },
-    "Cd": {
-        "jid": "JVASP-14832",
-        "energy_alignn_ff": 2.5374005,
-        "energy_chgnet": -0.9251905,
-        "energy_matgl": -0.937331,
-        "energy_mace": -0.908682,
-        "energy_sevennet": -0.906839
-    },
-    "Pm": {
-        "jid": "JVASP-966",
-        "energy_alignn_ff": -2.07879675,
-        "energy_chgnet": -4.73003,
-        "energy_matgl": -4.70232675,
-        "energy_mace": -4.7350055,
-        "energy_sevennet": -4.7350125
-    },
-    "Ho": {
-        "jid": "JVASP-25125",
-        "energy_alignn_ff": -1.8107043333333335,
-        "energy_chgnet": -4.564541333333334,
-        "energy_matgl": -4.5620140000000005,
-        "energy_mace": -4.573492333333333,
-        "energy_sevennet": -4.569997333333333
-    },
-    "Hf": {
-        "jid": "JVASP-802",
-        "energy_alignn_ff": -7.1547165,
-        "energy_chgnet": -9.9135115,
-        "energy_matgl": -9.94129,
-        "energy_mace": -9.9602735,
-        "energy_sevennet": -9.9526465
-    },
-    "Hg": {
-        "jid": "JVASP-25273",
-        "energy_alignn_ff": 2.640838,
-        "energy_chgnet": -0.285384,
-        "energy_matgl": -0.28593,
-        "energy_mace": -0.288451,
-        "energy_sevennet": -0.276385
-    },
-    "He": {
-        "jid": "JVASP-25167",
-        "energy_alignn_ff": 0.692646,
-        "energy_chgnet": -0.051122,
-        "energy_matgl": 0.004336,
-        "energy_mace": 0.009653,
-        "energy_sevennet": -0.0415045
-    },
-    "Mg": {
-        "jid": "JVASP-919",
-        "energy_alignn_ff": 1.408972,
-        "energy_chgnet": -1.596146,
-        "energy_matgl": -1.5950905,
-        "energy_mace": -1.6067645,
-        "energy_sevennet": -1.6045245
-    },
-    "K": {
-        "jid": "JVASP-25114",
-        "energy_alignn_ff": 1.250066,
-        "energy_chgnet": -1.089017,
-        "energy_matgl": -0.900627,
-        "energy_mace": -1.088554,
-        "energy_sevennet": -1.072364
-    },
-    "Mn": {
-        "jid": "JVASP-922",
-        "energy_alignn_ff": -4.3859348275862065,
-        "energy_chgnet": -9.111478793103448,
-        "energy_matgl": -9.133505999999999,
-        "energy_mace": -9.164792827586208,
-        "energy_sevennet": -9.115948896551725
-    },
-    "O": {
-        "jid": "JVASP-949",
-        "energy_alignn_ff": -3.092893625,
-        "energy_chgnet": -4.93406625,
-        "energy_matgl": -4.92246625,
-        "energy_mace": -5.090092625,
-        "energy_sevennet": -4.922183
-    },
-    "S": {
-        "jid": "JVASP-95268",
-        "energy_alignn_ff": -2.49916290625,
-        "energy_chgnet": -4.15215875,
-        "energy_matgl": -4.0800199375,
-        "energy_mace": -4.11382196875,
-        "energy_sevennet": -4.1272320625
-    },
-    "W": {
-        "jid": "JVASP-79561",
-        "energy_alignn_ff": -9.1716985,
-        "energy_chgnet": -12.76264375,
-        "energy_matgl": -12.88728225,
-        "energy_mace": -12.74655525,
-        "energy_sevennet": -12.7603645
-    },
-    "Zn": {
-        "jid": "JVASP-1056",
-        "energy_alignn_ff": 2.3596515,
-        "energy_chgnet": -1.2631135,
-        "energy_matgl": -1.279107,
-        "energy_mace": -1.277153,
-        "energy_sevennet": -1.2559245
-    },
-    "Zr": {
-        "jid": "JVASP-14612",
-        "energy_alignn_ff": -5.6843005,
-        "energy_chgnet": -8.510046,
-        "energy_matgl": -8.487857,
-        "energy_mace": -8.5319785,
-        "energy_sevennet": -8.5710905
-    },
-    "Er": {
-        "jid": "JVASP-102277",
-        "energy_alignn_ff": -1.8103855,
-        "energy_chgnet": -4.54730325,
-        "energy_matgl": -4.5462495,
-        "energy_mace": -4.57055375,
-        "energy_sevennet": -4.55634125
-    },
-    "Ni": {
-        "jid": "JVASP-943",
-        "energy_alignn_ff": 0.267769,
-        "energy_chgnet": -5.746612,
-        "energy_matgl": -5.740693,
-        "energy_mace": -5.731884,
-        "energy_sevennet": -5.768434
-    },
-    "Na": {
-        "jid": "JVASP-931",
-        "energy_alignn_ff": 0.90171,
-        "energy_chgnet": -1.2953955,
-        "energy_matgl": -1.290621,
-        "energy_mace": -1.3133655,
-        "energy_sevennet": -1.309338
-    },
-    "Nb": {
-        "jid": "JVASP-934",
-        "energy_alignn_ff": -6.71386,
-        "energy_chgnet": -10.025986,
-        "energy_matgl": -10.059839,
-        "energy_mace": -10.085746,
-        "energy_sevennet": -10.094292
-    },
-    "Nd": {
-        "jid": "JVASP-937",
-        "energy_alignn_ff": -2.18942225,
-        "energy_chgnet": -4.7303625,
-        "energy_matgl": -4.732285,
-        "energy_mace": -4.77048025,
-        "energy_sevennet": -4.751452
-    },
-    "Ne": {
-        "jid": "JVASP-21193",
-        "energy_alignn_ff": 2.326043,
-        "energy_chgnet": -0.036456,
-        "energy_matgl": -0.026325,
-        "energy_mace": 0.154394,
-        "energy_sevennet": -0.030487
-    },
-    "Fe": {
-        "jid": "JVASP-25142",
-        "energy_alignn_ff": -3.474067,
-        "energy_chgnet": -8.3403385,
-        "energy_matgl": -8.3962915,
-        "energy_mace": -8.3867815,
-        "energy_sevennet": -8.360154
-    },
-    "B": {
-        "jid": "JVASP-828",
-        "energy_alignn_ff": -5.147107083333333,
-        "energy_chgnet": -6.5688657500000005,
-        "energy_matgl": -6.606697083333334,
-        "energy_mace": -6.587750083333333,
-        "energy_sevennet": -6.631985333333334
-    },
-    "F": {
-        "jid": "JVASP-33718",
-        "energy_alignn_ff": 0.11726725,
-        "energy_chgnet": -1.901216,
-        "energy_matgl": -1.96192525,
-        "energy_mace": -1.90583125,
-        "energy_sevennet": -1.88403
-    },
-    "N": {
-        "jid": "JVASP-25250",
-        "energy_alignn_ff": -6.776678,
-        "energy_chgnet": -8.35449975,
-        "energy_matgl": -8.32737725,
-        "energy_mace": -8.3102885,
-        "energy_sevennet": -8.31863125
-    },
-    "Kr": {
-        "jid": "JVASP-25213",
-        "energy_alignn_ff": 1.967669,
-        "energy_chgnet": -0.0637565,
-        "energy_matgl": -0.0968225,
-        "energy_mace": -0.060912,
-        "energy_sevennet": -0.052547
-    },
-    "Si": {
-        "jid": "JVASP-1002",
-        "energy_alignn_ff": -4.0240705,
-        "energy_chgnet": -5.3138255,
-        "energy_matgl": -5.4190405,
-        "energy_mace": -5.3420265,
-        "energy_sevennet": -5.402981
-    },
-    "Sn": {
-        "jid": "JVASP-14601",
-        "energy_alignn_ff": -0.5207135,
-        "energy_chgnet": -3.823353,
-        "energy_matgl": -3.9790995,
-        "energy_mace": -3.921247,
-        "energy_sevennet": -3.9694585
-    },
-    "Sm": {
-        "jid": "JVASP-14812",
-        "energy_alignn_ff": -2.021082,
-        "energy_chgnet": -4.688136,
-        "energy_matgl": -4.671094,
-        "energy_mace": -4.69254675,
-        "energy_sevennet": -4.6989995
-    },
-    "V": {
-        "jid": "JVASP-14837",
-        "energy_alignn_ff": -4.914755,
-        "energy_chgnet": -9.077443,
-        "energy_matgl": -9.034538,
-        "energy_mace": -9.098935,
-        "energy_sevennet": -9.081524
-    },
-    "Sc": {
-        "jid": "JVASP-996",
-        "energy_alignn_ff": -3.340738,
-        "energy_chgnet": -6.2751955,
-        "energy_matgl": -6.2797465,
-        "energy_mace": -6.297023,
-        "energy_sevennet": -6.28785
-    },
-    "Sb": {
-        "jid": "JVASP-993",
-        "energy_alignn_ff": -2.089857,
-        "energy_chgnet": -4.0672785,
-        "energy_matgl": -4.1050825,
-        "energy_mace": -4.0842765,
-        "energy_sevennet": -4.1083495
-    },
-    "Se": {
-        "jid": "JVASP-7804",
-        "energy_alignn_ff": -1.7824116666666667,
-        "energy_chgnet": -3.5392023333333333,
-        "energy_matgl": -3.4793353333333332,
-        "energy_mace": -3.4744116666666667,
-        "energy_sevennet": -3.4769020000000004
-    },
-    "Co": {
-        "jid": "JVASP-858",
-        "energy_alignn_ff": -3.208796,
-        "energy_chgnet": -7.0292245,
-        "energy_matgl": -7.1024915,
-        "energy_mace": -7.0844295,
-        "energy_sevennet": -7.073042
-    },
-    "Cl": {
-        "jid": "JVASP-25104",
-        "energy_alignn_ff": -0.13556325,
-        "energy_chgnet": -1.8968495,
-        "energy_matgl": -1.8235,
-        "energy_mace": -1.83524975,
-        "energy_sevennet": -1.834533
-    },
-    "Ca": {
-        "jid": "JVASP-25180",
-        "energy_alignn_ff": 0.585537,
-        "energy_chgnet": -1.970015,
-        "energy_matgl": -1.98922,
-        "energy_mace": -2.009631,
-        "energy_sevennet": -1.991963
-    },
-    "Ce": {
-        "jid": "JVASP-852",
-        "energy_alignn_ff": -2.72069,
-        "energy_chgnet": -5.862665,
-        "energy_matgl": -5.862472,
-        "energy_mace": -5.878778,
-        "energy_sevennet": -5.897567
-    },
-    "Xe": {
-        "jid": "JVASP-25248",
-        "energy_alignn_ff": 2.3972965,
-        "energy_chgnet": -0.026187,
-        "energy_matgl": -0.1289395,
-        "energy_mace": -0.023738,
-        "energy_sevennet": -0.030133
-    },
-    "Tm": {
-        "jid": "JVASP-1035",
-        "energy_alignn_ff": -1.7555285,
-        "energy_chgnet": -4.4662675,
-        "energy_matgl": -4.447861,
-        "energy_mace": -4.439375,
-        "energy_sevennet": -4.4687315
-    },
-    "Cr": {
-        "jid": "JVASP-861",
-        "energy_alignn_ff": -5.394644,
-        "energy_chgnet": -9.540979,
-        "energy_matgl": -9.547915,
-        "energy_mace": -9.450621,
-        "energy_sevennet": -9.504951
-    },
-    "Cu": {
-        "jid": "JVASP-867",
-        "energy_alignn_ff": 1.481811,
-        "energy_chgnet": -4.083517,
-        "energy_matgl": -4.096651,
-        "energy_mace": -4.08482,
-        "energy_sevennet": -4.096196
-    },
-    "La": {
-        "jid": "JVASP-910",
-        "energy_alignn_ff": -2.45152875,
-        "energy_chgnet": -4.8954715,
-        "energy_matgl": -4.91215475,
-        "energy_mace": -4.90372125,
-        "energy_sevennet": -4.91955125
-    },
-    "Li": {
-        "jid": "JVASP-25117",
-        "energy_alignn_ff": -0.8245279999999999,
-        "energy_chgnet": -1.8828183333333335,
-        "energy_matgl": -1.9033153333333335,
-        "energy_mace": -1.9064726666666667,
-        "energy_sevennet": -1.9096840000000002
-    },
-    "Tl": {
-        "jid": "JVASP-25337",
-        "energy_alignn_ff": 0.869586,
-        "energy_chgnet": -2.347048,
-        "energy_matgl": -2.3508165,
-        "energy_mace": -2.350755,
-        "energy_sevennet": -2.345141
-    },
-    "Lu": {
-        "jid": "JVASP-916",
-        "energy_alignn_ff": -1.734765,
-        "energy_chgnet": -4.4955295,
-        "energy_matgl": -4.507209,
-        "energy_mace": -4.515136,
-        "energy_sevennet": -4.526551
-    },
-    "Ti": {
-        "jid": "JVASP-1029",
-        "energy_alignn_ff": -4.016277,
-        "energy_chgnet": -7.7862876666666665,
-        "energy_matgl": -7.875901666666667,
-        "energy_mace": -7.816422666666667,
-        "energy_sevennet": -7.815967666666666
-    },
-    "Te": {
-        "jid": "JVASP-25210",
-        "energy_alignn_ff": -1.177326,
-        "energy_chgnet": -3.1693719999999996,
-        "energy_matgl": -3.142266,
-        "energy_mace": -3.099973,
-        "energy_sevennet": -3.0926693333333333
-    },
-    "Tb": {
-        "jid": "JVASP-1017",
-        "energy_alignn_ff": -1.8727539999999998,
-        "energy_chgnet": -4.597796,
-        "energy_matgl": -4.619775333333333,
-        "energy_mace": -4.620745,
-        "energy_sevennet": -4.617845666666667
-    },
-    "Tc": {
-        "jid": "JVASP-1020",
-        "energy_alignn_ff": -6.328599,
-        "energy_chgnet": -10.339349,
-        "energy_matgl": -10.339732,
-        "energy_mace": -10.3385925,
-        "energy_sevennet": -10.3608055
-    },
-    "Ta": {
-        "jid": "JVASP-1014",
-        "energy_alignn_ff": -8.171007,
-        "energy_chgnet": -11.851633,
-        "energy_matgl": -11.877074,
-        "energy_mace": -11.899179,
-        "energy_sevennet": -11.837949
-    },
-    "Yb": {
-        "jid": "JVASP-21197",
-        "energy_alignn_ff": 1.062488,
-        "energy_chgnet": -1.52423,
-        "energy_matgl": -1.509347,
-        "energy_mace": -1.511301,
-        "energy_sevennet": -1.520443
-    },
-    "Dy": {
-        "jid": "JVASP-870",
-        "energy_alignn_ff": -1.8504466666666666,
-        "energy_chgnet": -4.585288666666666,
-        "energy_matgl": -4.583516666666667,
-        "energy_mace": -4.602253666666667,
-        "energy_sevennet": -4.587306666666667
-    },
-    "I": {
-        "jid": "JVASP-895",
-        "energy_alignn_ff": 0.43406375,
-        "energy_chgnet": -1.5900875,
-        "energy_matgl": -1.51894975,
-        "energy_mace": -1.7035675,
-        "energy_sevennet": -1.50836475
-    },
-    "U": {
-        "jid": "JVASP-14725",
-        "energy_alignn_ff": -7.5724695,
-        "energy_chgnet": -11.169176,
-        "energy_matgl": -11.181288,
-        "energy_mace": -11.2126675,
-        "energy_sevennet": -11.19569
-    },
-    "Y": {
-        "jid": "JVASP-1050",
-        "energy_alignn_ff": -3.85497,
-        "energy_chgnet": -6.4445845,
-        "energy_matgl": -6.436653,
-        "energy_mace": -6.468465,
-        "energy_sevennet": -6.450417
-    },
-    "Ac": {
-        "jid": "JVASP-810",
-        "energy_alignn_ff": -0.975209,
-        "energy_chgnet": -4.06527375,
-        "energy_matgl": -4.122096,
-        "energy_mace": -4.11465225,
-        "energy_sevennet": -4.0897685
-    },
-    "Ag": {
-        "jid": "JVASP-14606",
-        "energy_alignn_ff": 0.823297,
-        "energy_chgnet": -2.81171,
-        "energy_matgl": -2.805851,
-        "energy_mace": -2.836523,
-        "energy_sevennet": -2.827129
-    },
-    "Ir": {
-        "jid": "JVASP-901",
-        "energy_alignn_ff": -4.92212,
-        "energy_chgnet": -8.842527,
-        "energy_matgl": -8.896281,
-        "energy_mace": -8.821177,
-        "energy_sevennet": -8.861135
-    },
-    "Al": {
-        "jid": "JVASP-816",
-        "energy_alignn_ff": -1.937461,
-        "energy_chgnet": -3.664113,
-        "energy_matgl": -3.701539,
-        "energy_mace": -3.728351,
-        "energy_sevennet": -3.719476
-    },
-    "As": {
-        "jid": "JVASP-14603",
-        "energy_alignn_ff": -2.945886,
-        "energy_chgnet": -4.6230125,
-        "energy_matgl": -4.636945,
-        "energy_mace": -4.6254615,
-        "energy_sevennet": -4.6453695
-    },
-    "Ar": {
-        "jid": "JVASP-819",
-        "energy_alignn_ff": 1.947545,
-        "energy_chgnet": -0.067081,
-        "energy_matgl": -0.069127,
-        "energy_mace": -0.061463,
-        "energy_sevennet": -0.067557
-    },
-    "Au": {
-        "jid": "JVASP-825",
-        "energy_alignn_ff": -0.37486,
-        "energy_chgnet": -3.235706,
-        "energy_matgl": -3.261796,
-        "energy_mace": -3.2462,
-        "energy_sevennet": -3.266554
-    },
-    "In": {
-        "jid": "JVASP-898",
-        "energy_alignn_ff": 0.686736,
-        "energy_chgnet": -2.699644,
-        "energy_matgl": -2.71128,
-        "energy_mace": -2.705124,
-        "energy_sevennet": -2.715821
-    },
-    "Mo": {
-        "jid": "JVASP-21195",
-        "energy_alignn_ff": -7.134011,
-        "energy_chgnet": -10.696192,
-        "energy_matgl": -10.80138,
-        "energy_mace": -10.694583,
-        "energy_sevennet": -10.684041
-    }
-}"""
+if __name__ == "__main__":
+    import argparse
 
-analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_json)
+    parser = argparse.ArgumentParser(description="Run Materials Analyzer")
+    parser.add_argument("--jid", type=str, help="JID of the material")
+    parser.add_argument("--calculator_type", type=str, help="Type of calculator")
+    parser.add_argument("--chemical_potentials_file", type=str, default="chemical_potentials.json", help="Chemical potentials JSON file")
+    parser.add_argument("--jid_list", nargs='+', help="List of JIDs")
+    parser.add_argument("--calculator_types", nargs='+', help="List of calculator types")
+
+    args = parser.parse_args()
+
+    if args.jid and args.calculator_type:
+        # Single JID and calculator type provided
+        analyzer = MaterialsAnalyzer(
+            jid=args.jid,
+            calculator_type=args.calculator_type,
+            chemical_potentials_file=args.chemical_potentials_file,
+        )
+        analyzer.run_all()
+    elif args.jid_list and args.calculator_types:
+        # Multiple JIDs and calculator types provided
+        analyze_multiple_structures(
+            jid_list=args.jid_list,
+            calculator_types=args.calculator_types,
+            chemical_potentials_file=args.chemical_potentials_file,
+        )
+    else:
+        # Default to predefined lists
+        jid_list = [ 'JVASP-1002', 'JVASP-816', 'JVASP-867', 'JVASP-1029', 'JVASP-861','JVASP-30', 'JVASP-8169', 'JVASP-890', 'JVASP-8158','JVASP-8118',
+            'JVASP-107', 'JVASP-39', 'JVASP-7844', 'JVASP-35106', 'JVASP-1174',
+            'JVASP-1372', 'JVASP-91', 'JVASP-1186', 'JVASP-1408', 'JVASP-105410',
+            'JVASP-1177', 'JVASP-79204', 'JVASP-1393', 'JVASP-1312', 'JVASP-1327',
+            'JVASP-1183', 'JVASP-1192', 'JVASP-8003', 'JVASP-96', 'JVASP-1198',
+            'JVASP-1195', 'JVASP-9147', 'JVASP-41', 'JVASP-34674', 'JVASP-113',
+            'JVASP-32', 'JVASP-840', 'JVASP-21195', 'JVASP-981', 'JVASP-969',
+            'JVASP-802', 'JVASP-943', 'JVASP-14812', 'JVASP-984', 'JVASP-972',
+            'JVASP-958', 'JVASP-901', 'JVASP-1702', 'JVASP-931', 'JVASP-963',
+            'JVASP-95', 'JVASP-1201', 'JVASP-14837', 'JVASP-825', 'JVASP-966',
+            'JVASP-993', 'JVASP-23', 'JVASP-828', 'JVASP-1189', 'JVASP-810',
+            'JVASP-7630', 'JVASP-819', 'JVASP-1180', 'JVASP-837', 'JVASP-919',
+            'JVASP-7762', 'JVASP-934', 'JVASP-858', 'JVASP-895']
+        calculator_types = ["alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4", "alignn_ff_v5.27.2024", "alignn_ff_aff307k_kNN_2_2_128"]
+
+        analyze_multiple_structures(
+            jid_list=jid_list,
+            calculator_types=calculator_types,
+            chemical_potentials_file="chemical_potentials.json",
+        )
+
