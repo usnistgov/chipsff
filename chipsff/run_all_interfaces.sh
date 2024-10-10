@@ -5,7 +5,7 @@
 film_jid_list=('JVASP-1002' 'JVASP-816' 'JVASP-867' 'JVASP-1029')  # Add your actual film JIDs
 substrate_jid_list=('JVASP-107' 'JVASP-39' 'JVASP-7844' 'JVASP-35106')  # Add your actual substrate JIDs
 
-calculator_types=("alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4" "alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4" "alignn_ff_aff307k_kNN_2_2_128" "alignn_ff_v5.27.2024")
+calculator_types=("chgnet","mace")
 
 film_index="1_1_0"  # Adjust Miller indices as needed
 substrate_index="1_1_0"  # Adjust Miller indices as needed
