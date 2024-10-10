@@ -16,7 +16,7 @@ jid_list=('JVASP-1002' 'JVASP-816' 'JVASP-867' 'JVASP-1029' 'JVASP-861''JVASP-30
     'JVASP-7630' 'JVASP-819' 'JVASP-1180' 'JVASP-837' 'JVASP-919'
     'JVASP-7762' 'JVASP-934' 'JVASP-858' 'JVASP-895'
 )
-calculator_types=("alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4" "alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4" "alignn_ff_aff307k_kNN_2_2_128" "alignn_ff_v5.27.2024")
+calculator_types=("chgnet","mace")
 
 # Loop over each combination of JID and calculator type
 for jid in "${jid_list[@]}"; do
