@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import time
 import json
@@ -45,20 +46,17 @@ from matplotlib.gridspec import GridSpec
 
 import argparse
 
-
 dft_3d = data("dft_3d")
 vacancydb = data("vacancydb")
 surf_url = "https://figshare.com/ndownloader/files/46355689"
 surface_data = get_request_data(js_tag="surface_db_dd.json", url=surf_url)
 
-# Step 1: Define get_entry function to retrieve JID entry
 def get_entry(jid):
     for entry in dft_3d:
         if entry["jid"] == jid:
             return entry
     raise ValueError(f"JID {jid} not found in the database")
 
-# Step 2: Collect data by combining defect and surface info
 def collect_data(dft_3d, vacancydb, surface_data):
     defect_ids = list(set([entry["jid"] for entry in vacancydb]))
     surf_ids = list(set([entry["name"].split("Surface-")[1].split("_miller_")[0] for entry in surface_data]))
@@ -112,7 +110,6 @@ def get_vacancy_energy_entry(jid, aggregated_data):
                 return f"No vacancy data found for JID {jid}"
     return f"JID {jid} not found in the data."
     
-
 def get_surface_energy_entry(jid, aggregated_data):
     """
     Retrieve the surface energy entry (surf_en_entry) for a given jid.
@@ -134,18 +131,21 @@ def get_surface_energy_entry(jid, aggregated_data):
                 return f"No surface data found for JID {jid}"
     return f"JID {jid} not found in the data."
 
-# Utility functions
+
 def log_job_info(message, log_file):
+    """Log job information to a file and print it."""
     with open(log_file, "a") as f:
         f.write(message + "\n")
     print(message)
-
 
 def save_dict_to_json(data_dict, filename):
     with open(filename, "w") as f:
         json.dump(data_dict, f, indent=4)
 
-
+def load_dict_from_json(filename):
+    with open(filename, 'r') as f:
+        return json.load(f)
+        
 def setup_calculator(calculator_type):
     if calculator_type == "matgl":
         pot = matgl.load_model("M3GNet-MP-2021.2.8-PES")
@@ -159,51 +159,6 @@ def setup_calculator(calculator_type):
             force_multiplier=1,
             modl_filename="best_model.pt",
         )
-    elif calculator_type == "alignn_ff_aff307k_kNN_2_2_128":
-        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/aff307k_kNN_2_2_128"
-        return AlignnAtomwiseCalculator(
-            path=model_path,
-            stress_wt=0.3,
-            #force_mult_natoms=True,
-            #force_multiplier=1,
-            model_filename="best_model.pt",
-        )
-    elif calculator_type == "alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4":
-        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4"
-        return AlignnAtomwiseCalculator(
-            path=model_path,
-            stress_wt=0.3,
-            #force_mult_natoms=True,
-            #force_multiplier=1,
-            model_filename="best_model.pt",
-        )
-    elif calculator_type == "alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4":
-        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4"
-        return AlignnAtomwiseCalculator(
-            path=model_path,
-            stress_wt=0.3,
-            #force_mult_natoms=True,
-            #force_multiplier=1,
-            model_filename="best_model.pt",
-        )
-    elif calculator_type == "alignn_ff_v5.27.2024":
-        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/v5.27.2024"
-        return AlignnAtomwiseCalculator(
-            path=model_path,
-            stress_wt=0.3,
-            #force_mult_natoms=True,
-            #force_multiplier=1,
-            model_filename="best_model.pt",
-        )
-    elif calculator_type == "alignn_ff_alignnff_wt10":
-        model_path = "/users/dtw2/miniconda3/envs/umlff-final/lib/python3.10/site-packages/alignn/ff/alignnff_wt10"
-        return AlignnAtomwiseCalculator(
-            path=model_path,
-            stress_wt=0.3,
-            #force_mult_natoms=True,
-            #force_multiplier=1,
-            modl_filename="best_model.pt",
-        )
     elif calculator_type == "chgnet":
         return CHGNetCalculator()
     elif calculator_type == "mace":
@@ -214,24 +169,77 @@ def setup_calculator(calculator_type):
     else:
         raise ValueError("Unsupported calculator type")
 
-
 class MaterialsAnalyzer:
-    def __init__(self, jid, calculator_type, chemical_potentials_file):
-        self.jid = jid
-        self.reference_data = get_entry(jid)
-        self.calculator_type = calculator_type
-        self.output_dir = f"{jid}_{calculator_type}"
-        os.makedirs(self.output_dir, exist_ok=True)
-        self.log_file = os.path.join(
-            self.output_dir, f"{jid}_{calculator_type}_job_log.txt"
-        )
-        self.job_info = {"jid": jid, "calculator_type": calculator_type}
-        self.atoms = self.get_atoms(jid)#.get_conventional_atoms
-        self.calculator = self.setup_calculator()
-        self.chemical_potentials_file = chemical_potentials_file
-        self.chemical_potentials = self.load_chemical_potentials() 
+    def __init__(
+        self,
+        jid=None,
+        calculator_type=None,
+        chemical_potentials_file=None,
+        film_jid=None,
+        substrate_jid=None,
+        film_index=None,
+        substrate_index=None,
+    ):
+        self.calculator_type = calculator_type  # Ensure calculator_type is stored in self
+        self.film_jid = None
+        self.substrate_jid = None
+        self.film_index = None
+        self.substrate_index = None
+
+        if jid:
+            self.jid = jid
+            # Load atoms for the given JID
+            self.atoms = self.get_atoms(jid)
+            # Get reference data for the material
+            self.reference_data = get_entry(jid)
+            # Set up the output directory and log file
+            self.output_dir = f"{jid}_{calculator_type}"
+            os.makedirs(self.output_dir, exist_ok=True)
+            self.log_file = os.path.join(self.output_dir, f"{jid}_job_log.txt")
+            # Initialize job_info dictionary
+            self.job_info = {
+                "jid": jid,
+                "calculator_type": calculator_type
+            }
+            self.calculator = self.setup_calculator()
+            self.chemical_potentials_file = chemical_potentials_file
+            self.chemical_potentials = self.load_chemical_potentials()
+        elif film_jid and substrate_jid:
+            # Ensure film_jid and substrate_jid are strings, not lists
+            if isinstance(film_jid, list):
+                film_jid = film_jid[0]
+            if isinstance(substrate_jid, list):
+                substrate_jid = substrate_jid[0]
+
+            self.film_jid = film_jid
+            self.substrate_jid = substrate_jid
+
+            # Ensure film_index and substrate_index have default values
+            self.film_index = film_index if film_index else "1_1_0"
+            self.substrate_index = substrate_index if substrate_index else "1_1_0"
+
+            # Include Miller indices in directory and file names
+            self.output_dir = f"Interface_{film_jid}_{self.film_index}_{substrate_jid}_{self.substrate_index}_{calculator_type}"
+            os.makedirs(self.output_dir, exist_ok=True)
+            self.log_file = os.path.join(
+                self.output_dir,
+                f"Interface_{film_jid}_{self.film_index}_{substrate_jid}_{self.substrate_index}_job_log.txt"
+            )
+            self.job_info = {
+                "film_jid": film_jid,
+                "substrate_jid": substrate_jid,
+                "film_index": self.film_index,
+                "substrate_index": self.substrate_index,
+                "calculator_type": calculator_type
+            }
+            self.calculator = self.setup_calculator()
+            self.chemical_potentials_file = chemical_potentials_file
+            self.chemical_potentials = self.load_chemical_potentials()
+        else:
+            raise ValueError("Either 'jid' or both 'film_jid' and 'substrate_jid' must be provided.")
 
     def log(self, message):
+        """Log information to the job log file."""
         log_job_info(message, self.log_file)
 
     def get_atoms(self, jid):
@@ -476,9 +484,6 @@ class MaterialsAnalyzer:
         save_dict_to_json(self.job_info, self.get_job_info_filename())
 
         return elastic_tensor
-
-
-
 
     def run_phonon_analysis(self, relaxed_atoms):
         """Perform Phonon calculation, generate force constants, and plot band structure & DOS."""
@@ -744,11 +749,6 @@ class MaterialsAnalyzer:
 
         return phonon, zpe
 
-
-
-
-   
-
     def analyze_defects(self):
         """Analyze defects by generating, relaxing, and calculating vacancy formation energy."""
         self.log("Starting defect analysis...")
@@ -800,7 +800,6 @@ class MaterialsAnalyzer:
     # Save the job info to a JSON file
         save_dict_to_json(self.job_info, self.get_job_info_filename())
         self.log("Defect analysis completed.")
-
 
     def relax_defect_structure(self, atoms, name):
         """Relax the defect structure and log the process."""
@@ -911,7 +910,6 @@ class MaterialsAnalyzer:
             ),
         )
         self.log("Surface analysis completed.")
-
 
     def relax_surface_structure(self, atoms, indices):
         """
@@ -1342,8 +1340,8 @@ class MaterialsAnalyzer:
         ase_atoms.calc = calculator
 
         dt = 1 * ase.units.fs
-        temp0, nsteps0 = 3500, 10
-        temp1, nsteps1 = 300, 20
+        temp0, nsteps0 = 3500, 1000
+        temp1, nsteps1 = 300, 2000
         taut = 20 * ase.units.fs
         trj = os.path.join(self.output_dir, f"{self.jid}_melt.traj")
 
@@ -1423,10 +1421,98 @@ class MaterialsAnalyzer:
         supercell_dims = [max(1, scale) for scale in scale_factors]
         return supercell_dims
 
-    def get_job_info_filename(self):
-        return os.path.join(
-            self.output_dir, f"{self.jid}_{self.calculator_type}_job_info.json"
+    def analyze_interfaces(self):
+        """Perform interface analysis using intermat package."""
+        if not self.film_jid or not self.substrate_jid:
+            self.log("Film JID or substrate JID not provided, skipping interface analysis.")
+            return
+
+        self.log(f"Starting interface analysis between {self.film_jid} and {self.substrate_jid}")
+
+        # Ensure the output directory exists
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Prepare config
+        config = {
+            "film_jid": self.film_jid,
+            "substrate_jid": self.substrate_jid,
+            "film_index": self.film_index,
+            "substrate_index": self.substrate_index,
+            "disp_intvl": 0.05,
+            "calculator_method": self.calculator_type.lower(),
+        }
+
+        config_filename = os.path.join(
+            self.output_dir,
+            f"config_{self.film_jid}_{self.film_index}_{self.substrate_jid}_{self.substrate_index}_{self.calculator_type}.json"
         )
+
+        # Save config file
+        save_dict_to_json(config, config_filename)
+        self.log(f"Config file created: {config_filename}")
+
+        # Run intermat script using subprocess in self.output_dir
+        command = f"run_intermat.py --config_file {os.path.basename(config_filename)}"
+        self.log(f"Running command: {command}")
+
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=self.output_dir  # Set the working directory for the subprocess
+            )
+            self.log(f"Command output: {result.stdout}")
+        except subprocess.CalledProcessError as e:
+            self.log(f"Command failed with error: {e.stderr}")
+            return
+
+        # After execution, check for outputs in self.output_dir
+        main_results_filename = os.path.join(self.output_dir, "intermat_results.json")
+        if not os.path.exists(main_results_filename):
+            self.log(f"Results file not found: {main_results_filename}")
+            return
+
+        res = load_dict_from_json(main_results_filename)
+        w_adhesion = res.get("wads", [])
+        systems_info = res.get("systems", {})
+
+        # Handle intmat.png
+        intmat_filename = os.path.join(self.output_dir, "intmat.png")
+        if os.path.exists(intmat_filename):
+            new_intmat_filename = os.path.join(
+                self.output_dir,
+                f"intmat_{self.film_jid}_{self.film_index}_{self.substrate_jid}_{self.substrate_index}_{self.calculator_type}.png"
+            )
+            os.rename(intmat_filename, new_intmat_filename)
+            self.job_info["intmat_plot"] = new_intmat_filename
+            self.log(f"intmat.png saved as {new_intmat_filename}")
+        else:
+            self.log("intmat.png not found.")
+
+        if "wads" in res:
+            # Save additional plots or data as needed
+            self.job_info["interface_scan_results"] = main_results_filename
+            self.job_info["w_adhesion"] = w_adhesion
+            self.job_info["systems_info"] = systems_info
+            self.log(f"Interface scan results saved to {main_results_filename}")
+            self.log(f"w_adhesion: {w_adhesion}")
+            self.log(f"systems_info: {systems_info}")
+            save_dict_to_json(self.job_info, self.get_job_info_filename())
+        else:
+            self.log(f"No 'wads' key in results file: {main_results_filename}")
+
+    def get_job_info_filename(self):
+        if hasattr(self, 'jid') and self.jid:
+            return os.path.join(
+                self.output_dir, f"{self.jid}_{self.calculator_type}_job_info.json"
+            )
+        else:
+            return os.path.join(
+                self.output_dir, f"Interface_{self.film_jid}_{self.film_index}_{self.substrate_jid}_{self.substrate_index}_{self.calculator_type}_job_info.json"
+            )
 
     import numpy as np
     import pandas as pd
@@ -1489,12 +1575,10 @@ class MaterialsAnalyzer:
                 self.log(f"Error processing surface {surface_name}: {str(e)}")
                 continue  # Skip this surface and move to the next one
 
-
         # Vacancy energy analysis
         self.analyze_defects()
         vac_en, vac_en_entry = [], []
         vacancy_entries = get_vacancy_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
-
 
         # Assuming this is the part where you encounter the issue
         for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1):
@@ -1517,16 +1601,12 @@ class MaterialsAnalyzer:
                 self.log(f"Error processing defect {defect_name}: {str(e)}")
                 continue  # Skip this defect and move to the next one
 
-
-
-
-
-
-        # Phonon and zero-point energy
-        
-        #self.run_phonon3_analysis(relaxed_atoms)
-        #self.calculate_thermal_expansion(relaxed_atoms)
-        #quenched_atoms = self.general_melter(relaxed_atoms)
+        if self.film_jid and self.substrate_jid:
+            self.analyze_interfaces()
+            
+        self.run_phonon3_analysis(relaxed_atoms)
+        self.calculate_thermal_expansion(relaxed_atoms)
+        quenched_atoms = self.general_melter(relaxed_atoms)
 
         # Create final results dictionary
         final_results = {
@@ -1621,8 +1701,6 @@ class MaterialsAnalyzer:
         self.plot_error_scorecard(df)
 
         return error_dat
-
-
 
     def plot_error_scorecard(self, df):
         import plotly.express as px
@@ -1730,7 +1808,6 @@ class MaterialsAnalyzer:
         plt.savefig(pname)
         plt.close()
 
-
 def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_file):
     composite_error_data = {}
 
@@ -1768,6 +1845,20 @@ def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_
     # Save the composite dataframe
     composite_df.to_csv("composite_error_data.csv", index=True)
 
+def analyze_multiple_interfaces(film_jid_list, substrate_jid_list, calculator_types, chemical_potentials_file, film_index="1_1_0", substrate_index="1_1_0"):
+    for calculator_type in calculator_types:
+        for film_jid in film_jid_list:
+            for substrate_jid in substrate_jid_list:
+                print(f"Analyzing interface between {film_jid} and {substrate_jid} with {calculator_type}...")
+                analyzer = MaterialsAnalyzer(
+                    calculator_type=calculator_type,
+                    chemical_potentials_file=chemical_potentials_file,
+                    film_jid=film_jid,
+                    substrate_jid=substrate_jid,
+                    film_index=film_index,
+                    substrate_index=substrate_index,
+                )
+                analyzer.analyze_interfaces()
 
 def plot_composite_scorecard(df):
     """Plot the composite scorecard for all calculators"""
@@ -1794,55 +1885,60 @@ jid_list_all = [ 'JVASP-1002', 'JVASP-816', 'JVASP-867', 'JVASP-1029', 'JVASP-86
     'JVASP-7762', 'JVASP-934', 'JVASP-858', 'JVASP-895']
 #calculator_types = ["alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4","alignn_ff_v5.27.2024","alignn_ff_aff307k_kNN_2_2_128"]
 
-import argparse
-
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Run Materials Analyzer")
     parser.add_argument("--jid", type=str, help="JID of the material")
-    parser.add_argument("--calculator_type", type=str, help="Type of calculator")
+    parser.add_argument("--calculator_type", type=str, help="Type of calculator", required=True)
     parser.add_argument("--chemical_potentials_file", type=str, default="chemical_potentials.json", help="Chemical potentials JSON file")
     parser.add_argument("--jid_list", nargs='+', help="List of JIDs")
     parser.add_argument("--calculator_types", nargs='+', help="List of calculator types")
-
+    parser.add_argument("--film_jid", nargs='+', help="JID(s) of the film material(s)")
+    parser.add_argument("--substrate_jid", nargs='+', help="JID(s) of the substrate material(s)")
+    parser.add_argument("--film_index", type=str, help="Miller index of the film", default="1_1_0")
+    parser.add_argument("--substrate_index", type=str, help="Miller index of the substrate", default="1_1_0")
+    
     args = parser.parse_args()
 
-    if args.jid and args.calculator_type:
-        # Single JID and calculator type provided
+    # If film_jid is provided, treat it as a list
+    film_jids = args.film_jid if args.film_jid else []
+
+    # If substrate_jid is provided, treat it as a list
+    substrate_jids = args.substrate_jid if args.substrate_jid else []
+
+    # Case 1: Interface calculations with film_jid and substrate_jid
+    if film_jids and substrate_jids:
+        # Loop through all film and substrate JIDs and perform interface analysis
+        for film_jid, substrate_jid in zip(film_jids, substrate_jids):
+            print(f"Analyzing interface between {film_jid} and {substrate_jid} with {args.calculator_type}...")
+            analyzer = MaterialsAnalyzer(
+                calculator_type=args.calculator_type,
+                chemical_potentials_file=args.chemical_potentials_file,
+                film_jid=film_jid,
+                substrate_jid=substrate_jid,
+                film_index=args.film_index,
+                substrate_index=args.substrate_index,
+            )
+            analyzer.analyze_interfaces()
+
+    # Case 2: Single JID provided
+    elif args.jid and args.calculator_type:
+        print(f"Analyzing {args.jid} with {args.calculator_type}...")
         analyzer = MaterialsAnalyzer(
             jid=args.jid,
             calculator_type=args.calculator_type,
             chemical_potentials_file=args.chemical_potentials_file,
         )
         analyzer.run_all()
+
+    # Case 3: Multiple JIDs and calculator types provided (batch processing)
     elif args.jid_list and args.calculator_types:
-        # Multiple JIDs and calculator types provided
         analyze_multiple_structures(
             jid_list=args.jid_list,
             calculator_types=args.calculator_types,
             chemical_potentials_file=args.chemical_potentials_file,
         )
+
     else:
-        # Default to predefined lists
-        jid_list = [ 'JVASP-1002', 'JVASP-816', 'JVASP-867', 'JVASP-1029', 'JVASP-861','JVASP-30', 'JVASP-8169', 'JVASP-890', 'JVASP-8158','JVASP-8118',
-            'JVASP-107', 'JVASP-39', 'JVASP-7844', 'JVASP-35106', 'JVASP-1174',
-            'JVASP-1372', 'JVASP-91', 'JVASP-1186', 'JVASP-1408', 'JVASP-105410',
-            'JVASP-1177', 'JVASP-79204', 'JVASP-1393', 'JVASP-1312', 'JVASP-1327',
-            'JVASP-1183', 'JVASP-1192', 'JVASP-8003', 'JVASP-96', 'JVASP-1198',
-            'JVASP-1195', 'JVASP-9147', 'JVASP-41', 'JVASP-34674', 'JVASP-113',
-            'JVASP-32', 'JVASP-840', 'JVASP-21195', 'JVASP-981', 'JVASP-969',
-            'JVASP-802', 'JVASP-943', 'JVASP-14812', 'JVASP-984', 'JVASP-972',
-            'JVASP-958', 'JVASP-901', 'JVASP-1702', 'JVASP-931', 'JVASP-963',
-            'JVASP-95', 'JVASP-1201', 'JVASP-14837', 'JVASP-825', 'JVASP-966',
-            'JVASP-993', 'JVASP-23', 'JVASP-828', 'JVASP-1189', 'JVASP-810',
-            'JVASP-7630', 'JVASP-819', 'JVASP-1180', 'JVASP-837', 'JVASP-919',
-            'JVASP-7762', 'JVASP-934', 'JVASP-858', 'JVASP-895']
-        calculator_types = ["alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4", "alignn_ff_v5.27.2024", "alignn_ff_aff307k_kNN_2_2_128"]
-
-        analyze_multiple_structures(
-            jid_list=jid_list,
-            calculator_types=calculator_types,
-            chemical_potentials_file="chemical_potentials.json",
-        )
-
+        print("Please provide valid arguments for either single JID calculation or interface analysis.")
