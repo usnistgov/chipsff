@@ -1,16 +1,17 @@
 import os
 import pandas as pd
 import numpy as np
-import yaml
+import json
 import matplotlib.pyplot as plt
-from scipy.interpolate import interp1d
 from sklearn.metrics import mean_absolute_error
-from scipy.stats import pearsonr
 from jarvis.db.webpages import Webpage
-from jarvis.db.figshare import data
 import plotly.express as px
+import os
+import yaml
+from scipy.interpolate import interp1d
+from scipy.stats import pearsonr
+from jarvis.db.figshare import data
 
-# Function to extract phonon band structure data from JARVIS
 def get_phonon_band_structure(jid):
     """Get phonon band structure data from JARVIS webpage data for a given jid."""
     # Create a Webpage object for the given jid
@@ -305,37 +306,293 @@ def plot_missing_percentages(df):
     # Save the plot
     fig.write_image("missing_data_percentages.png")
     fig.show()
+    
+# Function to collect scalar properties data from the results.json files
+def collect_scalar_properties_data(base_dir):
+    data_list = []
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith('_results.json'):
+                results_path = os.path.join(root, file)
+                with open(results_path, 'r') as f:
+                    results = json.load(f)
 
+                dirname = os.path.basename(root)
+                parts = dirname.split('_')
+                jid = parts[0]
+                calculator_type = '_'.join(parts[1:])
+
+                # Collect calculated data
+                scalar_data_calc = {
+                    'jid': jid,
+                    'calculator_type': calculator_type,
+                    'a': results.get('energy', {}).get('final_a', None),
+                    'b': results.get('energy', {}).get('final_b', None),
+                    'c': results.get('energy', {}).get('final_c', None),
+                    'volume': results.get('energy', {}).get('final_vol', None),
+                    'formation_energy': results.get('form_en', {}).get('form_energy', None),
+                    'bulk_modulus': results.get('modulus', {}).get('kv', None),
+                    'c11': results.get('elastic_tensor', {}).get('c11', None),
+                    'c44': results.get('elastic_tensor', {}).get('c44', None),
+                }
+                data_list.append(scalar_data_calc)
+
+                # Collect reference data
+                scalar_data_ref = {
+                    'jid': jid,
+                    'calculator_type': 'JARVIS',
+                    'a': results.get('energy', {}).get('initial_a', None),
+                    'b': results.get('energy', {}).get('initial_b', None),
+                    'c': results.get('energy', {}).get('initial_c', None),
+                    'volume': results.get('energy', {}).get('initial_vol', None),
+                    'formation_energy': results.get('form_en', {}).get('form_energy_entry', None),
+                    'bulk_modulus': results.get('modulus', {}).get('kv_entry', None),
+                    'c11': results.get('elastic_tensor', {}).get('c11_entry', None),
+                    'c44': results.get('elastic_tensor', {}).get('c44_entry', None),
+                }
+                data_list.append(scalar_data_ref)
+
+    df = pd.DataFrame(data_list)
+    return df
+
+# Function to create scalar parity plots with MAE and a dashed 1:1 line
+def create_scalar_parity_plots(scalar_df, properties):
+    calculator_types = scalar_df['calculator_type'].unique().tolist()
+    calculator_types = [ct for ct in calculator_types if ct != 'JARVIS']
+
+    color_map = {
+        'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4': '#1f77b4',
+        'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4': '#ff7f0e',
+        'alignn_ff_aff307k_kNN_2_2_128': '#2ca02c',
+        'alignn_ff_v5.27.2024': '#d62728',
+    }
+
+    for prop in properties:
+        plt.figure(figsize=(8, 8))
+        jarvis_data = scalar_df[scalar_df['calculator_type'] == 'JARVIS'][['jid', prop]].set_index('jid')
+        for calculator in calculator_types:
+            calc_data = scalar_df[scalar_df['calculator_type'] == calculator][['jid', prop]].set_index('jid')
+            merged_data = jarvis_data.join(calc_data, lsuffix='_JARVIS', rsuffix=f'_{calculator}').dropna()
+            if merged_data.empty:
+                continue
+            mae = mean_absolute_error(merged_data[f'{prop}_JARVIS'], merged_data[f'{prop}_{calculator}'])
+            plt.scatter(
+                merged_data[f'{prop}_JARVIS'],
+                merged_data[f'{prop}_{calculator}'],
+                label=f'{calculator} (MAE: {mae:.4f})',
+                alpha=0.7,
+                edgecolor='k',
+                color=color_map.get(calculator, '#000000'),
+                s=100
+            )
+        if not merged_data.empty:
+            min_val = min(merged_data.min())
+            max_val = max(merged_data.max())
+            plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)  # Dashed 1:1 line
+            plt.xlabel(f'{prop} (JARVIS)', fontsize=14)
+            plt.ylabel(f'{prop} (Calculator)', fontsize=14)
+            plt.title(f'Parity Plot for {prop}', fontsize=16)
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(f'{prop}_parity_plot.png')
+            plt.close()
+
+# Function to collect surface energies data from results.json files
+def collect_surface_energies_data(base_dir):
+    data_list = []
+
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith('_results.json'):
+                results_path = os.path.join(root, file)
+                with open(results_path, 'r') as f:
+                    results = json.load(f)
+
+                dirname = os.path.basename(root)
+                parts = dirname.split('_')
+                jid = parts[0]
+                calculator_type = '_'.join(parts[1:])
+
+                surface_energies = results.get('surface_energy', [])
+                for surf in surface_energies:
+                    # Calculated data
+                    data_calc = {
+                        'jid': jid,
+                        'calculator_type': calculator_type,
+                        'surface_name': surf.get('name'),
+                        'surf_en': surf.get('surf_en', None),
+                    }
+                    data_list.append(data_calc)
+                    # Reference data
+                    data_ref = {
+                        'jid': jid,
+                        'calculator_type': 'JARVIS',
+                        'surface_name': surf.get('name'),
+                        'surf_en': surf.get('surf_en_entry', None),
+                    }
+                    data_list.append(data_ref)
+
+    df = pd.DataFrame(data_list)
+    return df
+
+# Function to create a consolidated surface energy parity plot with MAE
+def create_surface_energy_parity_plot(surface_df):
+    calculator_types = surface_df['calculator_type'].unique().tolist()
+    calculator_types = [ct for ct in calculator_types if ct != 'JARVIS']
+
+    color_map = {
+        'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4': '#1f77b4',
+        'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4': '#ff7f0e',
+        'alignn_ff_aff307k_kNN_2_2_128': '#2ca02c',
+        'alignn_ff_v5.27.2024': '#d62728',
+    }
+
+    plt.figure(figsize=(8, 8))
+    jarvis_data = surface_df[surface_df['calculator_type'] == 'JARVIS'][['jid', 'surf_en']].set_index('jid')
+    for calculator in calculator_types:
+        calc_data = surface_df[surface_df['calculator_type'] == calculator][['jid', 'surf_en']].set_index('jid')
+        merged_data = jarvis_data.join(calc_data, lsuffix='_JARVIS', rsuffix=f'_{calculator}').dropna()
+        if merged_data.empty:
+            continue
+        mae = mean_absolute_error(merged_data['surf_en_JARVIS'], merged_data[f'surf_en_{calculator}'])
+        plt.scatter(
+            merged_data['surf_en_JARVIS'],
+            merged_data[f'surf_en_{calculator}'],
+            label=f'{calculator} (MAE: {mae:.4f})',
+            alpha=0.7,
+            edgecolor='k',
+            color=color_map.get(calculator, '#000000'),
+            s=100
+        )
+
+    if not merged_data.empty:
+        min_val = min(merged_data.min())
+        max_val = max(merged_data.max())
+        plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)  # Dashed 1:1 line
+        plt.xlabel('Surface Energy (JARVIS)', fontsize=14)
+        plt.ylabel('Surface Energy (Calculator)', fontsize=14)
+        plt.title(f'Consolidated Parity Plot for Surface Energies', fontsize=16)
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f'consolidated_surface_energy_parity_plot.png')
+        plt.close()
+
+# Function to collect vacancy energies data from results.json files
+def collect_vacancy_energies_data(base_dir):
+    data_list = []
+
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith('_results.json'):
+                results_path = os.path.join(root, file)
+                with open(results_path, 'r') as f:
+                    results = json.load(f)
+
+                dirname = os.path.basename(root)
+                parts = dirname.split('_')
+                jid = parts[0]
+                calculator_type = '_'.join(parts[1:])
+
+                vacancy_energies = results.get('vacancy_energy', [])
+                for vac in vacancy_energies:
+                    # Calculated data
+                    data_calc = {
+                        'jid': jid,
+                        'calculator_type': calculator_type,
+                        'vacancy_name': vac.get('name'),
+                        'vac_en': vac.get('vac_en', None),
+                    }
+                    data_list.append(data_calc)
+                    # Reference data
+                    data_ref = {
+                        'jid': jid,
+                        'calculator_type': 'JARVIS',
+                        'vacancy_name': vac.get('name'),
+                        'vac_en': vac.get('vac_en_entry', None),
+                    }
+                    data_list.append(data_ref)
+
+    df = pd.DataFrame(data_list)
+    return df
+
+# Function to create a consolidated vacancy energy parity plot with MAE
+def create_vacancy_energy_parity_plot(vacancy_df):
+    calculator_types = vacancy_df['calculator_type'].unique().tolist()
+    calculator_types = [ct for ct in calculator_types if ct != 'JARVIS']
+
+    color_map = {
+        'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4': '#1f77b4',
+        'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4': '#ff7f0e',
+        'alignn_ff_aff307k_kNN_2_2_128': '#2ca02c',
+        'alignn_ff_v5.27.2024': '#d62728',
+    }
+
+    plt.figure(figsize=(8, 8))
+    jarvis_data = vacancy_df[vacancy_df['calculator_type'] == 'JARVIS'][['jid', 'vac_en']].set_index('jid')
+    for calculator in calculator_types:
+        calc_data = vacancy_df[vacancy_df['calculator_type'] == calculator][['jid', 'vac_en']].set_index('jid')
+        merged_data = jarvis_data.join(calc_data, lsuffix='_JARVIS', rsuffix=f'_{calculator}').dropna()
+        if merged_data.empty:
+            continue
+        mae = mean_absolute_error(merged_data['vac_en_JARVIS'], merged_data[f'vac_en_{calculator}'])
+        plt.scatter(
+            merged_data['vac_en_JARVIS'],
+            merged_data[f'vac_en_{calculator}'],
+            label=f'{calculator} (MAE: {mae:.4f})',
+            alpha=0.7,
+            edgecolor='k',
+            color=color_map.get(calculator, '#000000'),
+            s=100
+        )
+
+    if not merged_data.empty:
+        min_val = min(merged_data.min())
+        max_val = max(merged_data.max())
+        plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)  # Dashed 1:1 line
+        plt.xlabel('Vacancy Energy (JARVIS)', fontsize=14)
+        plt.ylabel('Vacancy Energy (Calculator)', fontsize=14)
+        plt.title(f'Consolidated Parity Plot for Vacancy Energies', fontsize=16)
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f'consolidated_vacancy_energy_parity_plot.png')
+        plt.close()
+
+# Main execution
 if __name__ == '__main__':
-    # Set the base directory where your output directories are located
-    base_dir = '.'  # Change this to your actual base directory if needed
+    base_dir = '.'  # Set your base directory
+
+    # Collect scalar properties and create parity plots
+    scalar_df = collect_scalar_properties_data(base_dir)
+    if not scalar_df.empty:
+        properties = ['a', 'b', 'c', 'volume', 'formation_energy', 'bulk_modulus', 'c11', 'c44']
+        create_scalar_parity_plots(scalar_df, properties)
+    else:
+        print('No scalar property data found.')
+
+    # Collect surface energies and create consolidated parity plot
+    surface_df = collect_surface_energies_data(base_dir)
+    if not surface_df.empty:
+        create_surface_energy_parity_plot(surface_df)
+    else:
+        print('No surface energy data found.')
+
+    # Collect vacancy energies and create consolidated parity plot
+    vacancy_df = collect_vacancy_energies_data(base_dir)
+    if not vacancy_df.empty:
+        create_vacancy_energy_parity_plot(vacancy_df)
+    else:
+        print('No vacancy energy data found.')
 
     # Collect all error data, including phonon errors
     all_errors_df = collect_error_data(base_dir)
-
     if not all_errors_df.empty:
-        # Aggregate the errors
         composite_df = aggregate_errors(all_errors_df)
-        # Save the aggregated errors to a CSV file
         composite_df.to_csv('composite_error_data.csv', index=False)
         print('Aggregated error data saved to composite_error_data.csv')
-
-        # Count missing entries per calculator_type
-        missing_summary = count_missing_entries(all_errors_df)
-        # Save missing entries summary to CSV
-        missing_summary.to_csv('missing_entries_summary.csv', index=False)
-        print('Missing entries summary saved to missing_entries_summary.csv')
-
-        # Optionally, merge missing_summary into composite_df
-        composite_df = composite_df.merge(missing_summary, on='calculator_type')
-        # Save updated composite_df
-        composite_df.to_csv('composite_error_data_with_missing.csv', index=False)
-
-        # Plot the composite scorecard
         plot_composite_scorecard(composite_df)
-
-        # Plot missing data percentages
         plot_missing_percentages(composite_df)
     else:
         print('No error data files found.')
-
