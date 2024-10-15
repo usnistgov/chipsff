@@ -5,7 +5,7 @@
 film_jid_list=('JVASP-1002' 'JVASP-816' 'JVASP-867' 'JVASP-1029')  # Add your actual film JIDs
 substrate_jid_list=('JVASP-107' 'JVASP-39' 'JVASP-7844' 'JVASP-35106')  # Add your actual substrate JIDs
 
-calculator_types=("chgnet","mace")
+calculator_types=("chgnet" "mace")
 
 film_index="1_1_0"  # Adjust Miller indices as needed
 substrate_index="1_1_0"  # Adjust Miller indices as needed
