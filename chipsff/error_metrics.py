@@ -6,11 +6,185 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_error
 from jarvis.db.webpages import Webpage
 import plotly.express as px
-import os
 import yaml
 from scipy.interpolate import interp1d
 from scipy.stats import pearsonr
 from jarvis.db.figshare import data
+import zipfile
+from pathlib import Path
+
+
+def write_leaderboard_files(base_dir, output_dir):
+    # Define the properties to track with their respective sub-keys
+    property_keys = {
+        'a': ('energy', 'initial_a', 'final_a'),
+        'b': ('energy', 'initial_b', 'final_b'),
+        'c': ('energy', 'initial_c', 'final_c'),
+        'vol': ('energy', 'initial_vol', 'final_vol'),
+        'form_en': ('form_en', 'form_energy_entry', 'form_energy'),
+        'c11': ('elastic_tensor', 'c11_entry', 'c11'),
+        'c44': ('elastic_tensor', 'c44_entry', 'c44'),
+        'kv': ('modulus', 'kv_entry', 'kv'),
+        'surf_en': ('surface_energy', None, None),
+        'vac_en': ('vacancy_energy', None, None)
+    }
+
+    # Initialize dictionaries to store contributions and ground truth
+    # contributions: {(property, calculator_type): [records]}
+    contributions = {}
+    # ground_truth: {property: {"train": {}, "test": {}}}
+    ground_truth = {key: {"train": {}, "test": {}} for key in property_keys.keys()}
+
+    # Iterate over immediate subdirectories in base_dir
+    for entry in os.listdir(base_dir):
+        subdir_path = os.path.join(base_dir, entry)
+        if os.path.isdir(subdir_path) and entry.startswith('JVASP-'):
+            # Split the directory name to extract JVASP-ID and calculator_type
+            # Assuming directory name format: JVASP-xxx_calculatorType
+            parts = entry.split('_', 1)
+            if len(parts) != 2:
+                print(f"Skipping directory '{entry}' as it does not conform to naming convention.")
+                continue
+            jasp_id, calculator_type = parts
+            # Remove any trailing or leading whitespace
+            jasp_id = jasp_id.strip()
+            calculator_type = calculator_type.strip()
+
+            # Path to results.json
+            results_filename = f"{entry}_results.json"
+            results_path = os.path.join(subdir_path, results_filename)
+            if not os.path.isfile(results_path):
+                print(f"results.json not found in '{subdir_path}'. Skipping.")
+                continue
+
+            # Load the results.json
+            with open(results_path, 'r') as f:
+                try:
+                    results = json.load(f)
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON in '{results_path}': {e}")
+                    continue
+
+            # Process each property
+            for prop, keys in property_keys.items():
+                main_key, entry_key, pred_key = keys
+                if main_key not in results:
+                    continue  # Skip if property is missing
+
+                if prop in ['a', 'b', 'c', 'vol']:
+                    energy = results['energy']
+                    target = energy.get(entry_key)
+                    prediction = energy.get(pred_key)
+                    if target is not None and prediction is not None:
+                        contributions.setdefault((prop, calculator_type), []).append({
+                            'id': jasp_id,
+                            'target': target,
+                            'prediction': prediction
+                        })
+                        ground_truth[prop]['test'][jasp_id] = target
+
+                elif prop == 'form_en':
+                    form_en = results['form_en']
+                    target = form_en.get(entry_key)
+                    prediction = form_en.get(pred_key)
+                    if target is not None and prediction is not None:
+                        contributions.setdefault((prop, calculator_type), []).append({
+                            'id': jasp_id,
+                            'target': target,
+                            'prediction': prediction
+                        })
+                        ground_truth[prop]['test'][jasp_id] = target
+
+                elif prop in ['c11', 'c44']:
+                    elastic = results['elastic_tensor']
+                    target = elastic.get(entry_key)
+                    prediction = elastic.get(pred_key)
+                    if target is not None and prediction is not None:
+                        contributions.setdefault((prop, calculator_type), []).append({
+                            'id': jasp_id,
+                            'target': target,
+                            'prediction': prediction
+                        })
+                        ground_truth[prop]['test'][jasp_id] = target
+
+                elif prop == 'kv':
+                    modulus = results['modulus']
+                    target = modulus.get(entry_key)
+                    prediction = modulus.get(pred_key)
+                    if target is not None and prediction is not None:
+                        contributions.setdefault((prop, calculator_type), []).append({
+                            'id': jasp_id,
+                            'target': target,
+                            'prediction': prediction
+                        })
+                        ground_truth[prop]['test'][jasp_id] = target
+
+                elif prop == 'surf_en':
+                    for surf in results['surface_energy']:
+                        surf_name = surf.get('name')
+                        if surf_name and 'surf_en_entry' in surf and 'surf_en' in surf:
+                            contributions.setdefault((prop, calculator_type), []).append({
+                                'id': surf_name,
+                                'target': surf['surf_en_entry'],
+                                'prediction': surf['surf_en']
+                            })
+                            ground_truth[prop]['test'][surf_name] = surf['surf_en_entry']
+
+                elif prop == 'vac_en':
+                    for vac in results['vacancy_energy']:
+                        vac_name = vac.get('name')
+                        if vac_name and 'vac_en_entry' in vac and 'vac_en' in vac:
+                            contributions.setdefault((prop, calculator_type), []).append({
+                                'id': vac_name,
+                                'target': vac['vac_en_entry'],
+                                'prediction': vac['vac_en']
+                            })
+                            ground_truth[prop]['test'][vac_name] = vac['vac_en_entry']
+
+    # Write contribution and ground truth files for each property and calculator_type
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Generate CSV.zip files per property per calculator_type
+    for (prop, calculator_type), records in contributions.items():
+        # Define file names without '-energy-' segment
+        contribution_file = f'AI-SinglePropertyPrediction-{prop}-{calculator_type}_pretrained-test-mae.csv'
+        contribution_path = os.path.join(output_dir, contribution_file)
+        # Create DataFrame and save to CSV
+        df = pd.DataFrame(records)
+        df.to_csv(contribution_path, index=False)
+
+        # Zip the CSV file
+        zip_filename = contribution_path + '.zip'
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.write(contribution_path, os.path.basename(contribution_path))
+        os.remove(contribution_path)  # Remove the original CSV file
+        print(f"Generated and zipped '{zip_filename}'.")
+
+    # Generate single JSON.zip files per property
+    for prop, gt in ground_truth.items():
+        # Define file name without '-energy-' segment
+        ground_truth_file = f'dft_3d_{prop}.json'
+        ground_truth_path = os.path.join(output_dir, ground_truth_file)
+
+        # Ensure "train" is an empty dictionary and "test" contains the ground truth
+        ground_truth_content = {
+            "train": {},
+            "test": gt["test"]
+        }
+
+        # Save ground truth JSON
+        with open(ground_truth_path, 'w') as json_file:
+            json.dump(ground_truth_content, json_file, indent=2)
+
+        # Zip the JSON file
+        zip_filename = ground_truth_path + '.zip'
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.write(ground_truth_path, os.path.basename(ground_truth_path))
+        os.remove(ground_truth_path)  # Remove the original JSON file
+        print(f"Generated and zipped '{zip_filename}'.")
+
+    print(f"All leaderboard files have been written to '{output_dir}'.")
+
 
 def get_phonon_band_structure(jid):
     """Get phonon band structure data from JARVIS webpage data for a given jid."""
@@ -101,13 +275,13 @@ def compare_phonon_data(distances_ref, frequencies_ref, distances_calc, frequenc
     return mae, mad, pearson_corr
 
 # Function to plot both phonon band structures together
-def plot_phonon_band_structures(distances_ref, frequencies_ref, distances_calc, frequencies_calc, jid, calculator_type, output_dir):
+def plot_phonon_band_structures(distances_ref, frequencies_ref, distances_calc, frequencies_calc, jid, calculator_type, output_dir, mae, mad, pearson_corr):
     """
     Plot the phonon band structures from JARVIS and MLFF calculations together.
     """
     num_bands = min(frequencies_ref.shape[1], frequencies_calc.shape[1])
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(10, 6), dpi=300)  # Increased DPI for better resolution
 
     # Plot JARVIS phonon bands
     for i in range(num_bands):
@@ -118,22 +292,34 @@ def plot_phonon_band_structures(distances_ref, frequencies_ref, distances_calc, 
         plt.plot(distances_calc, frequencies_calc[:, i], 'b', linewidth=1.0, label='MLFF' if i == 0 else '')
 
     plt.xlabel('Wave Vector Distance', fontsize=14)
-    plt.ylabel('Frequency (cm^-1)', fontsize=14)
+    plt.ylabel('Frequency (cm$^{-1}$)', fontsize=14)
     plt.title(f'Phonon Band Structure Comparison for {jid} ({calculator_type})', fontsize=16)
     plt.legend()
     plt.grid(True)
+
+    # No x=y line and no zooming applied as per user request
+
+    # Add error metrics as text annotations on the plot
+    textstr = '\n'.join((
+        f'MAE: {mae:.4f}',
+        f'MAD: {mad:.4f}',
+        f'Pearson Corr: {pearson_corr:.4f}',
+    ))
+    plt.text(0.05, 0.95, textstr, transform=plt.gca().transAxes,
+             fontsize=12, verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.5))
+
     plt.tight_layout()
 
     # Save the figure
     plot_filename = os.path.join(output_dir, f'{jid}_{calculator_type}_phonon_comparison.png')
-    plt.savefig(plot_filename)
+    plt.savefig(plot_filename, dpi=300)  # Ensure high-resolution save
     plt.close()
 
 # Function to collect error data, including phonon data
 def collect_error_data(base_dir):
     error_data_list = []
     phonon_error_data_list = []
-
     for root, dirs, files in os.walk(base_dir):
         for file in files:
             if file.endswith('_error_dat.csv'):
@@ -143,9 +329,13 @@ def collect_error_data(base_dir):
                 # Extract jid and calculator_type from the filename or directory name
                 filename = os.path.basename(error_dat_path)
                 base_filename = filename.replace('_error_dat.csv', '')
-                parts = base_filename.split('_')
-                jid = parts[0]
-                calculator_type = '_'.join(parts[1:])
+                parts = base_filename.split('_', 1)
+                if len(parts) != 2:
+                    print(f"Skipping file '{filename}' as it does not conform to naming convention.")
+                    continue
+                jid, calculator_type = parts
+                jid = jid.strip()
+                calculator_type = calculator_type.strip()
 
                 # Add jid and calculator_type to the DataFrame
                 df['jid'] = jid
@@ -171,11 +361,11 @@ def collect_error_data(base_dir):
                         distances_ref, frequencies_ref, distances_calc, frequencies_calc
                     )
 
-                    # Plot phonon band structures
+                    # Plot phonon band structures without zooming and x=y line
                     plot_phonon_band_structures(
                         distances_ref, frequencies_ref,
                         distances_calc, frequencies_calc,
-                        jid, calculator_type, root
+                        jid, calculator_type, root, mae, mad, pearson_corr
                     )
 
                     # Append phonon error data
@@ -225,7 +415,7 @@ def aggregate_errors(all_errors_df):
     missing_counts.columns = [col + '_missing_count' for col in missing_counts.columns]
 
     # Compute total number of entries per calculator_type
-    total_counts = grouped.size().reset_index(name='total_entries')
+    total_counts = grouped.size().rename('total_entries')
 
     # Reset index to 'calculator_type' for mean_errors and missing_counts
     mean_errors = mean_errors.reset_index()
@@ -242,31 +432,6 @@ def aggregate_errors(all_errors_df):
         composite_df[percentage_col] = (composite_df[missing_count_col] / composite_df['total_entries']) * 100
 
     return composite_df
-
-# Function to count missing entries per calculator_type
-def count_missing_entries(all_errors_df):
-    error_columns = ['err_a', 'err_b', 'err_c', 'err_form', 'err_vol',
-                     'err_kv', 'err_c11', 'err_c44', 'err_surf_en', 'err_vac_en',
-                     'phonon_mae', 'phonon_mad', 'phonon_pearson_corr']
-    # Mark rows with any NaN in error columns
-    all_errors_df['has_missing'] = all_errors_df[error_columns].isnull().any(axis=1)
-
-    # Group by calculator_type
-    grouped = all_errors_df.groupby('calculator_type')
-
-    # Total number of entries per calculator_type
-    total_counts = grouped.size().rename('total_entries')
-
-    # Number of entries with missing data per calculator_type
-    missing_counts = grouped['has_missing'].sum().rename('missing_entries')
-
-    # Combine into a DataFrame
-    missing_summary = pd.concat([total_counts, missing_counts], axis=1)
-
-    # Compute percentage of missing entries
-    missing_summary['missing_percentage'] = (missing_summary['missing_entries'] / missing_summary['total_entries']) * 100
-
-    return missing_summary.reset_index()
 
 # Function to plot the composite scorecard, including phonon errors
 def plot_composite_scorecard(df):
@@ -286,8 +451,8 @@ def plot_composite_scorecard(df):
 
     fig = px.imshow(error_df, text_auto=True, aspect="auto", labels=dict(color="Mean Error"))
     fig.update_layout(title="Composite Error Metrics by Calculator Type")
-    # Save the plot
-    fig.write_image("composite_error_scorecard.png")
+    # Save the plot with higher resolution
+    fig.write_image("composite_error_scorecard.png", scale=3)  # Increased scale for better resolution
     fig.show()
 
 # Function to plot missing data percentages
@@ -303,10 +468,10 @@ def plot_missing_percentages(df):
 
     fig = px.imshow(percentage_df, text_auto=True, aspect="auto", labels=dict(color="Missing %"))
     fig.update_layout(title="Missing Data Percentages by Calculator Type")
-    # Save the plot
-    fig.write_image("missing_data_percentages.png")
+    # Save the plot with higher resolution
+    fig.write_image("missing_data_percentages.png", scale=3)  # Increased scale for better resolution
     fig.show()
-    
+
 # Function to collect scalar properties data from the results.json files
 def collect_scalar_properties_data(base_dir):
     data_list = []
@@ -315,25 +480,33 @@ def collect_scalar_properties_data(base_dir):
             if file.endswith('_results.json'):
                 results_path = os.path.join(root, file)
                 with open(results_path, 'r') as f:
-                    results = json.load(f)
+                    try:
+                        results = json.load(f)
+                    except json.JSONDecodeError as e:
+                        print(f"Error decoding JSON in '{results_path}': {e}")
+                        continue
 
                 dirname = os.path.basename(root)
-                parts = dirname.split('_')
-                jid = parts[0]
-                calculator_type = '_'.join(parts[1:])
+                parts = dirname.split('_', 1)
+                if len(parts) != 2:
+                    print(f"Skipping directory '{dirname}' as it does not conform to naming convention.")
+                    continue
+                jid, calculator_type = parts
+                jid = jid.strip()
+                calculator_type = calculator_type.strip()
 
                 # Collect calculated data
                 scalar_data_calc = {
                     'jid': jid,
                     'calculator_type': calculator_type,
-                    'a': results.get('energy', {}).get('final_a', None),
-                    'b': results.get('energy', {}).get('final_b', None),
-                    'c': results.get('energy', {}).get('final_c', None),
-                    'volume': results.get('energy', {}).get('final_vol', None),
-                    'formation_energy': results.get('form_en', {}).get('form_energy', None),
-                    'bulk_modulus': results.get('modulus', {}).get('kv', None),
-                    'c11': results.get('elastic_tensor', {}).get('c11', None),
-                    'c44': results.get('elastic_tensor', {}).get('c44', None),
+                    'a': results.get('energy', {}).get('final_a', np.nan),
+                    'b': results.get('energy', {}).get('final_b', np.nan),
+                    'c': results.get('energy', {}).get('final_c', np.nan),
+                    'volume': results.get('energy', {}).get('final_vol', np.nan),
+                    'formation_energy': results.get('form_en', {}).get('form_energy', np.nan),
+                    'bulk_modulus': results.get('modulus', {}).get('kv', np.nan),
+                    'c11': results.get('elastic_tensor', {}).get('c11', np.nan),
+                    'c44': results.get('elastic_tensor', {}).get('c44', np.nan),
                 }
                 data_list.append(scalar_data_calc)
 
@@ -341,41 +514,52 @@ def collect_scalar_properties_data(base_dir):
                 scalar_data_ref = {
                     'jid': jid,
                     'calculator_type': 'JARVIS',
-                    'a': results.get('energy', {}).get('initial_a', None),
-                    'b': results.get('energy', {}).get('initial_b', None),
-                    'c': results.get('energy', {}).get('initial_c', None),
-                    'volume': results.get('energy', {}).get('initial_vol', None),
-                    'formation_energy': results.get('form_en', {}).get('form_energy_entry', None),
-                    'bulk_modulus': results.get('modulus', {}).get('kv_entry', None),
-                    'c11': results.get('elastic_tensor', {}).get('c11_entry', None),
-                    'c44': results.get('elastic_tensor', {}).get('c44_entry', None),
+                    'a': results.get('energy', {}).get('initial_a', np.nan),
+                    'b': results.get('energy', {}).get('initial_b', np.nan),
+                    'c': results.get('energy', {}).get('initial_c', np.nan),
+                    'volume': results.get('energy', {}).get('initial_vol', np.nan),
+                    'formation_energy': results.get('form_en', {}).get('form_energy_entry', np.nan),
+                    'bulk_modulus': results.get('modulus', {}).get('kv_entry', np.nan),
+                    'c11': results.get('elastic_tensor', {}).get('c11_entry', np.nan),
+                    'c44': results.get('elastic_tensor', {}).get('c44_entry', np.nan),
                 }
                 data_list.append(scalar_data_ref)
 
     df = pd.DataFrame(data_list)
     return df
 
-# Function to create scalar parity plots with MAE and a dashed 1:1 line
-def create_scalar_parity_plots(scalar_df, properties):
+# Function to create scalar parity plots with consistent MAE
+def create_scalar_parity_plots_consistent(scalar_df, properties):
     calculator_types = scalar_df['calculator_type'].unique().tolist()
     calculator_types = [ct for ct in calculator_types if ct != 'JARVIS']
+
+    # Define distinct marker shapes for different calculator types
+    marker_shapes = ['o', 's', 'D', '^', 'v', '>', '<', 'p', '*', 'h']  # Extend as needed
+    shape_map = {ct: marker_shapes[i % len(marker_shapes)] for i, ct in enumerate(calculator_types)}
 
     color_map = {
         'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4': '#1f77b4',
         'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4': '#ff7f0e',
         'alignn_ff_aff307k_kNN_2_2_128': '#2ca02c',
         'alignn_ff_v5.27.2024': '#d62728',
+        # Add more calculator types and colors as needed
     }
 
     for prop in properties:
-        plt.figure(figsize=(8, 8))
+        plt.figure(figsize=(8, 8), dpi=300)  # Increased DPI for better resolution
         jarvis_data = scalar_df[scalar_df['calculator_type'] == 'JARVIS'][['jid', prop]].set_index('jid')
+        all_min = []
+        all_max = []
         for calculator in calculator_types:
             calc_data = scalar_df[scalar_df['calculator_type'] == calculator][['jid', prop]].set_index('jid')
             merged_data = jarvis_data.join(calc_data, lsuffix='_JARVIS', rsuffix=f'_{calculator}').dropna()
             if merged_data.empty:
                 continue
+            # Compute MAE once and store it
             mae = mean_absolute_error(merged_data[f'{prop}_JARVIS'], merged_data[f'{prop}_{calculator}'])
+            mad = np.mean(np.abs(merged_data[f'{prop}_{calculator}'] - np.mean(merged_data[f'{prop}_{calculator}'])))
+            pearson_corr, _ = pearsonr(merged_data[f'{prop}_JARVIS'], merged_data[f'{prop}_{calculator}'])
+            # Plot the scatter with consistent MAE
             plt.scatter(
                 merged_data[f'{prop}_JARVIS'],
                 merged_data[f'{prop}_{calculator}'],
@@ -383,19 +567,34 @@ def create_scalar_parity_plots(scalar_df, properties):
                 alpha=0.7,
                 edgecolor='k',
                 color=color_map.get(calculator, '#000000'),
+                marker=shape_map.get(calculator, 'o'),
                 s=100
             )
-        if not merged_data.empty:
-            min_val = min(merged_data.min())
-            max_val = max(merged_data.max())
-            plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)  # Dashed 1:1 line
+            # Collect min and max for padding
+            all_min.append(merged_data[f'{prop}_JARVIS'].min())
+            all_min.append(merged_data[f'{prop}_{calculator}'].min())
+            all_max.append(merged_data[f'{prop}_JARVIS'].max())
+            all_max.append(merged_data[f'{prop}_{calculator}'].max())
+
+        if not jarvis_data.empty:
+            # Determine the overall min and max for the data
+            overall_min = min(all_min) if all_min else jarvis_data[f'{prop}_JARVIS'].min()
+            overall_max = max(all_max) if all_max else jarvis_data[f'{prop}_JARVIS'].max()
+            plt.plot([overall_min, overall_max], [overall_min, overall_max], 'k--', lw=2)  # 1:1 line
+
+            # Adjust plot limits with padding
+            padding = 0.05 * (overall_max - overall_min)
+            plt.xlim(overall_min - padding, overall_max + padding)
+            plt.ylim(overall_min - padding, overall_max + padding)
+
             plt.xlabel(f'{prop} (JARVIS)', fontsize=14)
             plt.ylabel(f'{prop} (Calculator)', fontsize=14)
             plt.title(f'Parity Plot for {prop}', fontsize=16)
             plt.legend()
             plt.grid(True)
             plt.tight_layout()
-            plt.savefig(f'{prop}_parity_plot.png')
+            # Save the plot with higher resolution
+            plt.savefig(f'{prop}_parity_plot.png', dpi=300)
             plt.close()
 
 # Function to collect surface energies data from results.json files
@@ -407,12 +606,20 @@ def collect_surface_energies_data(base_dir):
             if file.endswith('_results.json'):
                 results_path = os.path.join(root, file)
                 with open(results_path, 'r') as f:
-                    results = json.load(f)
+                    try:
+                        results = json.load(f)
+                    except json.JSONDecodeError as e:
+                        print(f"Error decoding JSON in '{results_path}': {e}")
+                        continue
 
                 dirname = os.path.basename(root)
-                parts = dirname.split('_')
-                jid = parts[0]
-                calculator_type = '_'.join(parts[1:])
+                parts = dirname.split('_', 1)
+                if len(parts) != 2:
+                    print(f"Skipping directory '{dirname}' as it does not conform to naming convention.")
+                    continue
+                jid, calculator_type = parts
+                jid = jid.strip()
+                calculator_type = calculator_type.strip()
 
                 surface_energies = results.get('surface_energy', [])
                 for surf in surface_energies:
@@ -421,7 +628,7 @@ def collect_surface_energies_data(base_dir):
                         'jid': jid,
                         'calculator_type': calculator_type,
                         'surface_name': surf.get('name'),
-                        'surf_en': surf.get('surf_en', None),
+                        'surf_en': surf.get('surf_en', np.nan),
                     }
                     data_list.append(data_calc)
                     # Reference data
@@ -429,33 +636,44 @@ def collect_surface_energies_data(base_dir):
                         'jid': jid,
                         'calculator_type': 'JARVIS',
                         'surface_name': surf.get('name'),
-                        'surf_en': surf.get('surf_en_entry', None),
+                        'surf_en': surf.get('surf_en_entry', np.nan),
                     }
                     data_list.append(data_ref)
 
     df = pd.DataFrame(data_list)
     return df
 
-# Function to create a consolidated surface energy parity plot with MAE
+# Function to create a parity plot for surface energies
 def create_surface_energy_parity_plot(surface_df):
     calculator_types = surface_df['calculator_type'].unique().tolist()
     calculator_types = [ct for ct in calculator_types if ct != 'JARVIS']
+
+    # Define distinct marker shapes for different calculator types
+    marker_shapes = ['o', 's', 'D', '^', 'v', '>', '<', 'p', '*', 'h']  # Extend as needed
+    shape_map = {ct: marker_shapes[i % len(marker_shapes)] for i, ct in enumerate(calculator_types)}
 
     color_map = {
         'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4': '#1f77b4',
         'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4': '#ff7f0e',
         'alignn_ff_aff307k_kNN_2_2_128': '#2ca02c',
         'alignn_ff_v5.27.2024': '#d62728',
+        # Add more calculator types and colors as needed
     }
 
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=(8, 8), dpi=300)  # Increased DPI for better resolution
     jarvis_data = surface_df[surface_df['calculator_type'] == 'JARVIS'][['jid', 'surf_en']].set_index('jid')
+    all_min = []
+    all_max = []
     for calculator in calculator_types:
         calc_data = surface_df[surface_df['calculator_type'] == calculator][['jid', 'surf_en']].set_index('jid')
         merged_data = jarvis_data.join(calc_data, lsuffix='_JARVIS', rsuffix=f'_{calculator}').dropna()
         if merged_data.empty:
             continue
+        # Compute MAE once and store it
         mae = mean_absolute_error(merged_data['surf_en_JARVIS'], merged_data[f'surf_en_{calculator}'])
+        mad = np.mean(np.abs(merged_data[f'surf_en_{calculator}'] - np.mean(merged_data[f'surf_en_{calculator}'])))
+        pearson_corr, _ = pearsonr(merged_data['surf_en_JARVIS'], merged_data[f'surf_en_{calculator}'])
+        # Plot the scatter with consistent MAE
         plt.scatter(
             merged_data['surf_en_JARVIS'],
             merged_data[f'surf_en_{calculator}'],
@@ -463,20 +681,34 @@ def create_surface_energy_parity_plot(surface_df):
             alpha=0.7,
             edgecolor='k',
             color=color_map.get(calculator, '#000000'),
+            marker=shape_map.get(calculator, 'o'),
             s=100
         )
+        # Collect min and max for padding
+        all_min.append(merged_data['surf_en_JARVIS'].min())
+        all_min.append(merged_data[f'surf_en_{calculator}'].min())
+        all_max.append(merged_data['surf_en_JARVIS'].max())
+        all_max.append(merged_data[f'surf_en_{calculator}'].max())
 
-    if not merged_data.empty:
-        min_val = min(merged_data.min())
-        max_val = max(merged_data.max())
-        plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)  # Dashed 1:1 line
-        plt.xlabel('Surface Energy (JARVIS)', fontsize=14)
-        plt.ylabel('Surface Energy (Calculator)', fontsize=14)
-        plt.title(f'Consolidated Parity Plot for Surface Energies', fontsize=16)
+    if not jarvis_data.empty:
+        # Determine the overall min and max for the data
+        overall_min = min(all_min) if all_min else jarvis_data['surf_en_JARVIS'].min()
+        overall_max = max(all_max) if all_max else jarvis_data['surf_en_JARVIS'].max()
+        plt.plot([overall_min, overall_max], [overall_min, overall_max], 'k--', lw=2)  # 1:1 line
+
+        # Adjust plot limits with padding
+        padding = 0.05 * (overall_max - overall_min)
+        plt.xlim(overall_min - padding, overall_max + padding)
+        plt.ylim(overall_min - padding, overall_max + padding)
+
+        plt.xlabel('Surface Energy (JARVIS-DFT) (J/m$^2$)', fontsize=14)  # Added units
+        plt.ylabel('Surface Energy (Calculator) (J/m$^2$)', fontsize=14)  # Added units
+        plt.title(f'Parity Plot for Surface Energies', fontsize=16)
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
-        plt.savefig(f'consolidated_surface_energy_parity_plot.png')
+        # Save the plot with higher resolution
+        plt.savefig(f'surface_energy_parity_plot.png', dpi=300)
         plt.close()
 
 # Function to collect vacancy energies data from results.json files
@@ -488,12 +720,20 @@ def collect_vacancy_energies_data(base_dir):
             if file.endswith('_results.json'):
                 results_path = os.path.join(root, file)
                 with open(results_path, 'r') as f:
-                    results = json.load(f)
+                    try:
+                        results = json.load(f)
+                    except json.JSONDecodeError as e:
+                        print(f"Error decoding JSON in '{results_path}': {e}")
+                        continue
 
                 dirname = os.path.basename(root)
-                parts = dirname.split('_')
-                jid = parts[0]
-                calculator_type = '_'.join(parts[1:])
+                parts = dirname.split('_', 1)
+                if len(parts) != 2:
+                    print(f"Skipping directory '{dirname}' as it does not conform to naming convention.")
+                    continue
+                jid, calculator_type = parts
+                jid = jid.strip()
+                calculator_type = calculator_type.strip()
 
                 vacancy_energies = results.get('vacancy_energy', [])
                 for vac in vacancy_energies:
@@ -502,7 +742,7 @@ def collect_vacancy_energies_data(base_dir):
                         'jid': jid,
                         'calculator_type': calculator_type,
                         'vacancy_name': vac.get('name'),
-                        'vac_en': vac.get('vac_en', None),
+                        'vac_en': vac.get('vac_en', np.nan),
                     }
                     data_list.append(data_calc)
                     # Reference data
@@ -510,33 +750,44 @@ def collect_vacancy_energies_data(base_dir):
                         'jid': jid,
                         'calculator_type': 'JARVIS',
                         'vacancy_name': vac.get('name'),
-                        'vac_en': vac.get('vac_en_entry', None),
+                        'vac_en': vac.get('vac_en_entry', np.nan),
                     }
                     data_list.append(data_ref)
 
     df = pd.DataFrame(data_list)
     return df
 
-# Function to create a consolidated vacancy energy parity plot with MAE
+# Function to create a parity plot for vacancy energies
 def create_vacancy_energy_parity_plot(vacancy_df):
     calculator_types = vacancy_df['calculator_type'].unique().tolist()
     calculator_types = [ct for ct in calculator_types if ct != 'JARVIS']
+
+    # Define distinct marker shapes for different calculator types
+    marker_shapes = ['o', 's', 'D', '^', 'v', '>', '<', 'p', '*', 'h']  # Extend as needed
+    shape_map = {ct: marker_shapes[i % len(marker_shapes)] for i, ct in enumerate(calculator_types)}
 
     color_map = {
         'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4': '#1f77b4',
         'alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4': '#ff7f0e',
         'alignn_ff_aff307k_kNN_2_2_128': '#2ca02c',
         'alignn_ff_v5.27.2024': '#d62728',
+        # Add more calculator types and colors as needed
     }
 
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=(8, 8), dpi=300)  # Increased DPI for better resolution
     jarvis_data = vacancy_df[vacancy_df['calculator_type'] == 'JARVIS'][['jid', 'vac_en']].set_index('jid')
+    all_min = []
+    all_max = []
     for calculator in calculator_types:
         calc_data = vacancy_df[vacancy_df['calculator_type'] == calculator][['jid', 'vac_en']].set_index('jid')
         merged_data = jarvis_data.join(calc_data, lsuffix='_JARVIS', rsuffix=f'_{calculator}').dropna()
         if merged_data.empty:
             continue
+        # Compute MAE once and store it
         mae = mean_absolute_error(merged_data['vac_en_JARVIS'], merged_data[f'vac_en_{calculator}'])
+        mad = np.mean(np.abs(merged_data[f'vac_en_{calculator}'] - np.mean(merged_data[f'vac_en_{calculator}'])))
+        pearson_corr, _ = pearsonr(merged_data['vac_en_JARVIS'], merged_data[f'vac_en_{calculator}'])
+        # Plot the scatter with consistent MAE
         plt.scatter(
             merged_data['vac_en_JARVIS'],
             merged_data[f'vac_en_{calculator}'],
@@ -544,55 +795,90 @@ def create_vacancy_energy_parity_plot(vacancy_df):
             alpha=0.7,
             edgecolor='k',
             color=color_map.get(calculator, '#000000'),
+            marker=shape_map.get(calculator, 'o'),
             s=100
         )
+        # Collect min and max for padding
+        all_min.append(merged_data['vac_en_JARVIS'].min())
+        all_min.append(merged_data[f'vac_en_{calculator}'].min())
+        all_max.append(merged_data['vac_en_JARVIS'].max())
+        all_max.append(merged_data[f'vac_en_{calculator}'].max())
 
-    if not merged_data.empty:
-        min_val = min(merged_data.min())
-        max_val = max(merged_data.max())
-        plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)  # Dashed 1:1 line
-        plt.xlabel('Vacancy Energy (JARVIS)', fontsize=14)
-        plt.ylabel('Vacancy Energy (Calculator)', fontsize=14)
-        plt.title(f'Consolidated Parity Plot for Vacancy Energies', fontsize=16)
+    if not jarvis_data.empty:
+        # Determine the overall min and max for the data
+        overall_min = min(all_min) if all_min else jarvis_data['vac_en_JARVIS'].min()
+        overall_max = max(all_max) if all_max else jarvis_data['vac_en_JARVIS'].max()
+        plt.plot([overall_min, overall_max], [overall_min, overall_max], 'k--', lw=2)  # 1:1 line
+
+        # Adjust plot limits with padding
+        padding = 0.05 * (overall_max - overall_min)
+        plt.xlim(overall_min - padding, overall_max + padding)
+        plt.ylim(overall_min - padding, overall_max + padding)
+
+        plt.xlabel('Vacancy Energy (JARVIS-DFT) (eV)', fontsize=14)  # Added units
+        plt.ylabel('Vacancy Energy (Calculator) (eV)', fontsize=14)  # Added units
+        plt.title(f'Parity Plot for Vacancy Energies', fontsize=16)
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
-        plt.savefig(f'consolidated_vacancy_energy_parity_plot.png')
+        # Save the plot with higher resolution
+        plt.savefig(f'vacancy_energy_parity_plot.png', dpi=300)
         plt.close()
 
-# Main execution
-if __name__ == '__main__':
-    base_dir = '.'  # Set your base directory
 
-    # Collect scalar properties and create parity plots
+def main():
+    base_dir = '.'  # Set your base directory path
+    output_dir = './leaderboard_files'  # Set your desired output directory path
+
+    # 1. Leaderboard Generation
+    print("Starting Leaderboard Generation...")
+    write_leaderboard_files(base_dir, output_dir)
+
+    # 2. Scalar Properties and Parity Plots
+    print("\nCollecting Scalar Properties Data...")
     scalar_df = collect_scalar_properties_data(base_dir)
     if not scalar_df.empty:
         properties = ['a', 'b', 'c', 'volume', 'formation_energy', 'bulk_modulus', 'c11', 'c44']
-        create_scalar_parity_plots(scalar_df, properties)
+        print("Creating Scalar Parity Plots...")
+        create_scalar_parity_plots_consistent(scalar_df, properties)
     else:
         print('No scalar property data found.')
 
-    # Collect surface energies and create consolidated parity plot
+    # 3. Surface Energies and Parity Plot
+    print("\nCollecting Surface Energies Data...")
     surface_df = collect_surface_energies_data(base_dir)
     if not surface_df.empty:
+        print("Creating Surface Energy Parity Plot...")
         create_surface_energy_parity_plot(surface_df)
     else:
         print('No surface energy data found.')
 
-    # Collect vacancy energies and create consolidated parity plot
+    # 4. Vacancy Energies and Parity Plot
+    print("\nCollecting Vacancy Energies Data...")
     vacancy_df = collect_vacancy_energies_data(base_dir)
     if not vacancy_df.empty:
+        print("Creating Vacancy Energy Parity Plot...")
         create_vacancy_energy_parity_plot(vacancy_df)
     else:
         print('No vacancy energy data found.')
 
-    # Collect all error data, including phonon errors
+    # 5. Error Data Collection and Aggregation
+    print("\nCollecting Error Data...")
     all_errors_df = collect_error_data(base_dir)
     if not all_errors_df.empty:
+        print("Aggregating Error Data...")
         composite_df = aggregate_errors(all_errors_df)
         composite_df.to_csv('composite_error_data.csv', index=False)
         print('Aggregated error data saved to composite_error_data.csv')
+
+        print("Plotting Composite Scorecard...")
         plot_composite_scorecard(composite_df)
+
+        print("Plotting Missing Data Percentages...")
         plot_missing_percentages(composite_df)
     else:
         print('No error data files found.')
+
+if __name__ == '__main__':
+    main()
+
