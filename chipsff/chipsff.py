@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import os
 import subprocess
 import sys
@@ -17,18 +18,18 @@ from jarvis.io.vasp.inputs import Poscar
 from jarvis.core.kpoints import Kpoints3D as Kpoints
 from jarvis.analysis.defects.vacancy import Vacancy
 from jarvis.analysis.defects.surface import Surface
-
+from chipsff.config import CHIPSFFConfig
 from phonopy import Phonopy, PhonopyQHA
 from phonopy.file_IO import write_FORCE_CONSTANTS
 from phonopy.phonon.band_structure import BandStructure
 from phonopy.structure.atoms import Atoms as PhonopyAtoms
-from phono3py import Phono3py
-
+#from phono3py import Phono3py
+import pprint
 from alignn.ff.ff import AlignnAtomwiseCalculator, default_path
 from matgl.ext.ase import M3GNetCalculator
 from chgnet.model.dynamics import CHGNetCalculator
-from sevenn.sevennet_calculator import SevenNetCalculator
-from mace.calculators import mace_mp
+#from sevenn.sevennet_calculator import SevenNetCalculator
+#from mace.calculators import mace_mp
 import elastic
 from elastic import get_elementary_deformations, get_elastic_tensor
 import pandas as pd
@@ -38,7 +39,7 @@ import glob
 import io
 import contextlib
 import re
-
+from jarvis.db.jsonutils import loadjson
 import plotly.express as px
 
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -154,7 +155,7 @@ def setup_calculator(calculator_type):
         model_path = default_path()
         return AlignnAtomwiseCalculator(
             path=model_path,
-            stress_wt=0.1,
+            stress_wt=0.3,
             force_mult_natoms=True,
             force_multiplier=1,
             modl_filename="best_model.pt",
@@ -1549,6 +1550,7 @@ class MaterialsAnalyzer:
         elastic_tensor = self.calculate_elastic_tensor(relaxed_atoms)
         c11_entry = self.reference_data.get("elastic_tensor", [[0]])[0][0]
         c44_entry = self.reference_data.get("elastic_tensor", [[0, 0, 0, [0, 0, 0, 0]]])[3][3]
+        return None
         phonon, zpe = self.run_phonon_analysis(relaxed_atoms)
         # Surface energy analysis
         self.analyze_surfaces()
@@ -1889,55 +1891,53 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Run Materials Analyzer")
-    parser.add_argument("--jid", type=str, help="JID of the material")
-    parser.add_argument("--calculator_type", type=str, help="Type of calculator", required=True)
-    parser.add_argument("--chemical_potentials_file", type=str, default="chemical_potentials.json", help="Chemical potentials JSON file")
-    parser.add_argument("--jid_list", nargs='+', help="List of JIDs")
-    parser.add_argument("--calculator_types", nargs='+', help="List of calculator types")
-    parser.add_argument("--film_jid", nargs='+', help="JID(s) of the film material(s)")
-    parser.add_argument("--substrate_jid", nargs='+', help="JID(s) of the substrate material(s)")
-    parser.add_argument("--film_index", type=str, help="Miller index of the film", default="1_1_0")
-    parser.add_argument("--substrate_index", type=str, help="Miller index of the substrate", default="1_1_0")
+    
+    parser.add_argument("--input_file", default="input.json",type=str, help="JID of the material")
+
     
     args = parser.parse_args()
+    input_file=loadjson(args.input_file)
+    input_file_data=CHIPSFFConfig(**input_file)
+    
+    pprint.pprint(input_file_data.dict())
 
     # If film_jid is provided, treat it as a list
-    film_jids = args.film_jid if args.film_jid else []
+    film_jids = input_file_data.film_id if input_file_data.film_id else []
 
     # If substrate_jid is provided, treat it as a list
-    substrate_jids = args.substrate_jid if args.substrate_jid else []
+    substrate_jids = input_file_data.substrate_id if input_file_data.substrate_id else []
 
     # Case 1: Interface calculations with film_jid and substrate_jid
     if film_jids and substrate_jids:
         # Loop through all film and substrate JIDs and perform interface analysis
         for film_jid, substrate_jid in zip(film_jids, substrate_jids):
-            print(f"Analyzing interface between {film_jid} and {substrate_jid} with {args.calculator_type}...")
+            print(f"Analyzing interface between {film_jid} and {substrate_jid} with {input_file_data.calculator_type}...")
             analyzer = MaterialsAnalyzer(
-                calculator_type=args.calculator_type,
-                chemical_potentials_file=args.chemical_potentials_file,
+                calculator_type=input_file_data.calculator_type,
+                chemical_potentials_file=input_file_data.chemical_potential_file,
                 film_jid=film_jid,
                 substrate_jid=substrate_jid,
-                film_index=args.film_index,
-                substrate_index=args.substrate_index,
+                film_index=input_file_data.film_index,
+                substrate_index=input_file_data.substrate_index,
             )
             analyzer.analyze_interfaces()
 
     # Case 2: Single JID provided
-    elif args.jid and args.calculator_type:
-        print(f"Analyzing {args.jid} with {args.calculator_type}...")
+    elif input_file_data.jid and input_file_data.calculator_type:
+        print(f"Analyzing {input_file_data.jid} with {input_file_data.calculator_type}...")
         analyzer = MaterialsAnalyzer(
-            jid=args.jid,
-            calculator_type=args.calculator_type,
-            chemical_potentials_file=args.chemical_potentials_file,
+            jid=input_file_data.jid,
+            calculator_type=input_file_data.calculator_type,
+            chemical_potentials_file=input_file_data.chemical_potentials_file,
         )
         analyzer.run_all()
 
     # Case 3: Multiple JIDs and calculator types provided (batch processing)
-    elif args.jid_list and args.calculator_types:
+    elif input_file_data.jid_list and input_file_data.calculator_types:
         analyze_multiple_structures(
-            jid_list=args.jid_list,
-            calculator_types=args.calculator_types,
-            chemical_potentials_file=args.chemical_potentials_file,
+            jid_list=input_file_data.jid_list,
+            calculator_types=input_file_data.calculator_types,
+            chemical_potentials_file=input_file_data.chemical_potentials_file,
         )
 
     else:
