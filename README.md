@@ -1,7 +1,5 @@
 # chipsff
 
-# Materials Analyzer
-
 ## Overview
 This repository provides a comprehensive framework for performing materials analysis, including defect and surface energy calculations, vacancy formation, interface analysis, and thermal properties like phonon band structures and elastic tensors. The code supports multiple calculators and workflows that integrate with the JARVIS database and the ASE (Atomic Simulation Environment) to ensure seamless execution of materials calculations.
 
