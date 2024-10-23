@@ -52,19 +52,19 @@ python materials_analyzer.py --jid <JARVIS_ID> --calculator_type <calculator_typ
 ### 2. Batch Processing
 To analyze multiple materials at once:
 ```bash
-python materials_analyzer.py --jid_list <JID1> <JID2> --calculator_types <calculator_type1> <calculator_type2>
+python chipsff.py --jid_list <JID1> <JID2> --calculator_types <calculator_type1> <calculator_type2>
 ```
 
 ### 3. Interface Analysis
 To run an interface analysis between a film and substrate:
 ```bash
-python materials_analyzer.py --film_jid <Film_JID> --substrate_jid <Substrate_JID> --calculator_type <calculator_type>
+python chipsff.py --film_jid <Film_JID> --substrate_jid <Substrate_JID> --calculator_type <calculator_type>
 ```
 
 ### 4. Thermal and Phonon Analysis
 Phonon and thermal properties can be analyzed and plotted using:
 ```bash
-python materials_analyzer.py --jid <JARVIS_ID> --calculator_type <calculator_type>
+python chipsff.py --jid <JARVIS_ID> --calculator_type <calculator_type>
 ```
 
 ### 5. Vacancy and Surface Energy Analysis
@@ -82,7 +82,7 @@ Vacancy and surface energy calculations are automatically handled during the ana
 ## Example
 To run a full analysis on a material with JID 'JVASP-1002' using the `alignn_ff` calculator:
 ```bash
-python materials_analyzer.py --jid JVASP-1002 --calculator_type alignn_ff
+python chipsff.py --jid JVASP-1002 --calculator_type alignn_ff
 ```
 
 ## Outputs
@@ -144,17 +144,17 @@ This is the main class of the repository that handles the entire analysis pipeli
 #### Single Material Analysis
 To run the complete analysis pipeline for a single material with a specified calculator:
 ```bash
-python materials_analyzer.py --jid <JARVIS_ID> --calculator_type <calculator_type>
+python chipsff.py --jid <JARVIS_ID> --calculator_type <calculator_type>
 ```
 
 #### Multiple Materials Batch Processing
 To analyze a list of materials:
 ```bash
-python materials_analyzer.py --jid_list <JID1> <JID2> --calculator_types <calculator_type1> <calculator_type2>
+python chipsff.py --jid_list <JID1> <JID2> --calculator_types <calculator_type1> <calculator_type2>
 ```
 
 #### Interface Analysis
 To analyze the interface between two materials:
 ```bash
-python materials_analyzer.py --film_jid <Film_JID> --substrate_jid <Substrate_JID> --calculator_type <calculator_type>
+python chipsff.py --film_jid <Film_JID> --substrate_jid <Substrate_JID> --calculator_type <calculator_type>
 ```
