@@ -46,7 +46,7 @@ pip install -r requirements.txt
 ### 1. Single Material Analysis
 To run an analysis on a single material by specifying its JID and calculator type:
 ```bash
-python materials_analyzer.py --jid <JARVIS_ID> --calculator_type <calculator_type>
+python chipsff.py --jid <JARVIS_ID> --calculator_type <calculator_type>
 ```
 
 ### 2. Batch Processing
