@@ -149,14 +149,20 @@ def load_dict_from_json(filename):
         
 def setup_calculator(calculator_type):
     if calculator_type == "matgl":
+        import matgl
         pot = matgl.load_model("M3GNet-MP-2021.2.8-PES")
         return M3GNetCalculator(pot, compute_stress=True, stress_weight=0.01)
     elif calculator_type == "alignn_ff":
-        model_path = default_path()
+        #model_path = default_path()
+        model_path='/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4/out111g/'
+        model_path='/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4/out111b/'
+        model_path='/wrk/knc6/AFFBench/aff307k_kNN_2_2_128/out111c/'
+        model_path='/wrk/knc6/AFFBench/aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4_cut4_knn/out111b'
+        print('model_path',model_path)
         return AlignnAtomwiseCalculator(
             path=model_path,
             stress_wt=0.3,
-            force_mult_natoms=True,
+            force_mult_natoms=False,
             force_multiplier=1,
             modl_filename="best_model.pt",
         )
@@ -280,10 +286,11 @@ class MaterialsAnalyzer:
 
         return final_energy, dyn.nsteps
 
-    def relax_structure(self):
+    def relax_structure(self,conventional_cell=True):
         """Perform structure relaxation and log the process."""
         self.log(f"Starting relaxation for {self.jid}")
-
+        if  conventional_cell:
+            self.atoms = self.atoms.get_conventional_atoms
         # Convert atoms to ASE format and assign the calculator
         ase_atoms = self.atoms.ase_converter()
         ase_atoms.calc = self.calculator
@@ -1550,8 +1557,9 @@ class MaterialsAnalyzer:
         elastic_tensor = self.calculate_elastic_tensor(relaxed_atoms)
         c11_entry = self.reference_data.get("elastic_tensor", [[0]])[0][0]
         c44_entry = self.reference_data.get("elastic_tensor", [[0, 0, 0, [0, 0, 0, 0]]])[3][3]
-        return None
+        #return None
         phonon, zpe = self.run_phonon_analysis(relaxed_atoms)
+        """
         # Surface energy analysis
         self.analyze_surfaces()
         surf_en, surf_en_entry = [], []
@@ -1609,6 +1617,7 @@ class MaterialsAnalyzer:
         self.run_phonon3_analysis(relaxed_atoms)
         self.calculate_thermal_expansion(relaxed_atoms)
         quenched_atoms = self.general_melter(relaxed_atoms)
+        """
 
         # Create final results dictionary
         final_results = {
@@ -1637,21 +1646,21 @@ class MaterialsAnalyzer:
                 "kv": bulk_modulus,
                 "kv_entry": kv_entry
             },
-            "surface_energy": [
-                {"name": f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}", 
-                 "surf_en": se, 
-                 "surf_en_entry": see} 
-                for se, see, indices in zip(surf_en, surf_en_entry, [[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]])
-            ],
-            "vacancy_energy": [
-                {"name": ve_name, "vac_en": ve, "vac_en_entry": vee}
-                for ve_name, ve, vee in zip(
-                    [f"{self.jid}_{defect.to_dict()['symbol']}" for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1)], 
-                    vac_en, 
-                    vac_en_entry
-                )
-            ],
-            "zpe": zpe
+            #"surface_energy": [
+            #    {"name": f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}", 
+            #     "surf_en": se, 
+            #     "surf_en_entry": see} 
+            #    for se, see, indices in zip(surf_en, surf_en_entry, [[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]])
+            #],
+            #"vacancy_energy": [
+            #    {"name": ve_name, "vac_en": ve, "vac_en_entry": vee}
+            #    for ve_name, ve, vee in zip(
+            #        [f"{self.jid}_{defect.to_dict()['symbol']}" for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1)], 
+            #        vac_en, 
+            #        vac_en_entry
+            #    )
+            #],
+            #"zpe": zpe
         }
 
         # Write results to a JSON file
@@ -1668,8 +1677,8 @@ class MaterialsAnalyzer:
         err_c11 = mean_absolute_error([c11_entry], [elastic_tensor.get("C_11", np.nan)])
         err_c44 = mean_absolute_error([c44_entry], [elastic_tensor.get("C_44", np.nan)])
 
-        err_surf_en = mean_absolute_error(surf_en_entry, surf_en) if surf_en else np.nan
-        err_vac_en = mean_absolute_error(vac_en_entry, vac_en) if vac_en else np.nan
+        #err_surf_en = mean_absolute_error(surf_en_entry, surf_en) if surf_en else np.nan
+        #err_vac_en = mean_absolute_error(vac_en_entry, vac_en) if vac_en else np.nan
 
         end_time = time.time()
         total_time = end_time - start_time
@@ -1684,8 +1693,8 @@ class MaterialsAnalyzer:
             "err_kv": err_kv,
             "err_c11": err_c11,
             "err_c44": err_c44,
-            "err_surf_en": err_surf_en,
-            "err_vac_en": err_vac_en,
+            #"err_surf_en": err_surf_en,
+            #"err_vac_en": err_vac_en,
             "time": total_time
         }
 
@@ -1914,7 +1923,7 @@ if __name__ == "__main__":
             print(f"Analyzing interface between {film_jid} and {substrate_jid} with {input_file_data.calculator_type}...")
             analyzer = MaterialsAnalyzer(
                 calculator_type=input_file_data.calculator_type,
-                chemical_potentials_file=input_file_data.chemical_potential_file,
+                chemical_potentials_file=input_file_data.chemical_potentials_file,
                 film_jid=film_jid,
                 substrate_jid=substrate_jid,
                 film_index=input_file_data.film_index,

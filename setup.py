@@ -26,7 +26,7 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     scripts=[
-        "chipsff/chipsff.py",
+        "chipsff/run_chipsff.py",
     ],
     python_requires=">=3.8",
 )
