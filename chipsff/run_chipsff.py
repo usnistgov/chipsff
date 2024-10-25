@@ -17,20 +17,6 @@ from jarvis.io.vasp.inputs import Poscar
 from jarvis.core.kpoints import Kpoints3D as Kpoints
 from jarvis.analysis.defects.vacancy import Vacancy
 from jarvis.analysis.defects.surface import Surface
-
-from phonopy import Phonopy, PhonopyQHA
-from phonopy.file_IO import write_FORCE_CONSTANTS
-from phonopy.phonon.band_structure import BandStructure
-from phonopy.structure.atoms import Atoms as PhonopyAtoms
-from phono3py import Phono3py
-
-from alignn.ff.ff import AlignnAtomwiseCalculator, default_path
-from matgl.ext.ase import M3GNetCalculator
-from chgnet.model.dynamics import CHGNetCalculator
-from sevenn.sevennet_calculator import SevenNetCalculator
-from mace.calculators import mace_mp
-import elastic
-from elastic import get_elementary_deformations, get_elastic_tensor
 import pandas as pd
 import h5py
 import shutil
@@ -38,12 +24,9 @@ import glob
 import io
 import contextlib
 import re
-
 import plotly.express as px
-
 from sklearn.metrics import mean_absolute_error, r2_score
 from matplotlib.gridspec import GridSpec
-
 import argparse
 
 dft_3d = data("dft_3d")
@@ -148,24 +131,57 @@ def load_dict_from_json(filename):
         
 def setup_calculator(calculator_type):
     if calculator_type == "matgl":
+        from matgl.ext.ase import M3GNetCalculator
         pot = matgl.load_model("M3GNet-MP-2021.2.8-PES")
         return M3GNetCalculator(pot, compute_stress=True, stress_weight=0.01)
+    elif calculator_type == "matgl-direct":
+        from matgl.ext.ase import M3GNetCalculator
+        pot = matgl.load_model("M3GNet-MP-2021.2.8-DIRECT-PES")
+        return M3GNetCalculator(pot, compute_stress=True, stress_weight=0.01)
     elif calculator_type == "alignn_ff":
-        model_path = default_path()
+        from alignn.ff.ff import AlignnAtomwiseCalculator, default_path
+        model_path = default_path() #can be adjusted to other ALIGNN models
         return AlignnAtomwiseCalculator(
             path=model_path,
-            stress_wt=0.1,
-            force_mult_natoms=True,
+            stress_wt=0.3,
+            force_mult_natoms=False,
             force_multiplier=1,
             modl_filename="best_model.pt",
         )
     elif calculator_type == "chgnet":
+        from chgnet.model.dynamics import CHGNetCalculator
         return CHGNetCalculator()
     elif calculator_type == "mace":
+        from mace.calculators import mace_mp
         return mace_mp()
+    elif calculator_type == "mace-alexandria":
+        from mace.calculators.mace import MACECalculator
+        model_path="/utils/models/alexandria_v2/mace/2D_universal_force_field_cpu.model" #adjust path to mace-alexandria
+        return MACECalculator(model_path,device="cpu") 
     elif calculator_type == "sevennet":
-        checkpoint_path = "SevenNet/pretrained_potentials/SevenNet_0__11July2024/checkpoint_sevennet_0.pth"
+        from sevenn.sevennet_calculator import SevenNetCalculator
+        checkpoint_path = "SevenNet/pretrained_potentials/SevenNet_0__11July2024/checkpoint_sevennet_0.pth" #adjust path to sevennet
         return SevenNetCalculator(checkpoint_path, device="cpu")
+    elif calculator_type == "orb-v2":
+        from orb_models.forcefield import pretrained
+        from orb_models.forcefield.calculator import ORBCalculator
+        orbff = pretrained.orb_v2()
+        return ORBCalculator(orbff, device="cpu")
+    elif calculator_type == "eqV2_31M_omat":
+        from fairchem.core import OCPCalculator
+        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_31M_omat.pt") #adjust path to OMat24
+    elif calculator_type == "eqV2_86M_omat":
+        from fairchem.core import OCPCalculator
+        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_86M_omat.pt") #adjust path to OMat24   
+    elif calculator_type == "eqV2_153M_omat":
+        from fairchem.core import OCPCalculator
+        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_153M_omat.pt") #adjust path to OMat24
+    elif calculator_type == "eqV2_31M_omat_mp_salex":
+        from fairchem.core import OCPCalculator
+        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_31M_omat_mp_salex.pt") #adjust path to OMat24
+    elif calculator_type == "eqV2_86M_omat_mp_salex":
+        from fairchem.core import OCPCalculator
+        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_86M_omat_mp_salex.pt") #adjust path to OMat24
     else:
         raise ValueError("Unsupported calculator type")
 
@@ -450,6 +466,8 @@ class MaterialsAnalyzer:
 
 
     def calculate_elastic_tensor(self, relaxed_atoms):
+        import elastic
+        from elastic import get_elementary_deformations, get_elastic_tensor
         """
         Calculate the elastic tensor for the relaxed structure using the provided calculator.
         """
@@ -486,6 +504,10 @@ class MaterialsAnalyzer:
         return elastic_tensor
 
     def run_phonon_analysis(self, relaxed_atoms):
+        from phonopy import Phonopy, PhonopyQHA
+        from phonopy.file_IO import write_FORCE_CONSTANTS
+        from phonopy.phonon.band_structure import BandStructure
+        from phonopy.structure.atoms import Atoms as PhonopyAtoms
         """Perform Phonon calculation, generate force constants, and plot band structure & DOS."""
         self.log(f"Starting phonon analysis for {self.jid}")
         phonopy_bands_figname = f"ph_{self.jid}_{self.calculator_type}.png"
@@ -969,6 +991,7 @@ class MaterialsAnalyzer:
         return surface_energy
 
     def run_phonon3_analysis(self, relaxed_atoms):
+        from phono3py import Phono3py
         """Run Phono3py analysis, process results, and generate thermal conductivity data."""
         self.log(f"Starting Phono3py analysis for {self.jid}")
 
@@ -1095,6 +1118,10 @@ class MaterialsAnalyzer:
             return converted_kappa
 
     def calculate_thermal_expansion(self, relaxed_atoms):
+        from phonopy import Phonopy, PhonopyQHA
+        from phonopy.file_IO import write_FORCE_CONSTANTS
+        from phonopy.phonon.band_structure import BandStructure
+        from phonopy.structure.atoms import Atoms as PhonopyAtoms
         """Calculate the thermal expansion coefficient using QHA."""
 
         def log(message):
@@ -1212,6 +1239,10 @@ class MaterialsAnalyzer:
     def generate_phonons_for_volumes(
         self, structures, calculator, dim=[2, 2, 2], distance=0.2, mesh=[20, 20, 20]
     ):
+        from phonopy import Phonopy, PhonopyQHA
+        from phonopy.file_IO import write_FORCE_CONSTANTS
+        from phonopy.phonon.band_structure import BandStructure
+        from phonopy.structure.atoms import Atoms as PhonopyAtoms
         all_free_energies = []
         all_heat_capacities = []
         all_entropies = []
@@ -1276,6 +1307,10 @@ class MaterialsAnalyzer:
         temperatures,
         output_dir,
     ):
+        from phonopy import Phonopy, PhonopyQHA
+        from phonopy.file_IO import write_FORCE_CONSTANTS
+        from phonopy.phonon.band_structure import BandStructure
+        from phonopy.structure.atoms import Atoms as PhonopyAtoms
         # Debugging: print array sizes
         print(f"Number of temperatures: {len(temperatures)}")
         print(f"Number of free energy data points: {free_energies.shape}")
@@ -1710,103 +1745,6 @@ class MaterialsAnalyzer:
         fname_plot = os.path.join(self.output_dir, f"{unique_dir}_error_scorecard.png")
         fig.write_image(fname_plot)
         fig.show()
-        
-    def plot_results(self, fname):
-        df = pd.read_csv(fname)
-
-        plt.rcParams.update({"font.size": 18})
-        plt.figure(figsize=(16, 14))
-        the_grid = GridSpec(4, 3)
-
-        # Plot lattice parameter a
-        plt.subplot(the_grid[0, 0])
-        plt.scatter(df["initial_a"], df["final_a"])
-        plt.plot(df["initial_a"], df["initial_a"], c="black", linestyle="-.")
-        plt.xlabel("a-DFT ($\AA$)")
-        plt.ylabel("a-ML ($\AA$)")
-        title = "(a) " + str(round(r2_score(df["initial_a"], df["final_a"]), 2))
-        plt.title(title)
-
-        # Plot lattice parameter b
-        plt.subplot(the_grid[0, 1])
-        plt.scatter(df["initial_b"], df["final_b"])
-        plt.plot(df["initial_b"], df["initial_b"], c="black", linestyle="-.")
-        plt.xlabel("b-DFT ($\AA$)")
-        plt.ylabel("b-ML ($\AA$)")
-        title = "(b) " + str(round(r2_score(df["initial_b"], df["final_b"]), 2))
-        plt.title(title)
-
-        # Plot lattice parameter c
-        plt.subplot(the_grid[0, 2])
-        plt.scatter(df["initial_c"], df["final_c"])
-        plt.plot(df["initial_c"], df["initial_c"], c="black", linestyle="-.")
-        plt.xlabel("c-DFT ($\AA$)")
-        plt.ylabel("c-ML ($\AA$)")
-        title = "(c) " + str(round(r2_score(df["initial_c"], df["final_c"]), 2))
-        plt.title(title)
-
-        # Plot formation energy
-        plt.subplot(the_grid[1, 0])
-        plt.scatter(df["form_en_entry"], df["form_en"])
-        plt.plot(df["form_en_entry"], df["form_en_entry"], c="black", linestyle="-.")
-        plt.xlabel("$E_f$-DFT (eV/atom)")
-        plt.ylabel("$E_f$-ML (eV/atom)")
-        title = "(d) " + str(round(r2_score(df["form_en_entry"], df["form_en"]), 2))
-        plt.title(title)
-
-        # Plot volume
-        plt.subplot(the_grid[1, 1])
-        plt.scatter(df["initial_vol"], df["final_vol"])
-        plt.plot(df["initial_vol"], df["initial_vol"], c="black", linestyle="-.")
-        plt.xlabel("vol-DFT (${\AA}^3$)")
-        plt.ylabel("vol-ML (${\AA}^3$)")
-        title = "(e) " + str(round(r2_score(df["initial_vol"], df["final_vol"]), 2))
-        plt.title(title)
-
-        # Plot C11
-        plt.subplot(the_grid[1, 2])
-        plt.scatter(df["c11_entry"], df["c11"])
-        plt.plot(df["c11_entry"], df["c11_entry"], c="black", linestyle="-.")
-        plt.xlabel("$C_{11}$-DFT (GPa)")
-        plt.ylabel("$C_{11}$-ML (GPa)")
-        title = "(f) " + str(round(r2_score(df["c11_entry"], df["c11"]), 2))
-        plt.title(title)
-
-        # Plot C44
-        plt.subplot(the_grid[2, 0])
-        plt.scatter(df["c44_entry"], df["c44"])
-        plt.plot(df["c44_entry"], df["c44_entry"], c="black", linestyle="-.")
-        plt.xlabel("$C_{44}$-DFT (GPa)")
-        plt.ylabel("$C_{44}$-ML (GPa)")
-        title = "(g) " + str(round(r2_score(df["c44_entry"], df["c44"]), 2))
-        plt.title(title)
-
-        # Plot vacancy energy
-        vac_x = np.array(df["vac_en_entry"].iloc[0].split(";"), dtype=float)
-        vac_y = np.array(df["vac_en"].iloc[0].split(";"), dtype=float)
-        plt.subplot(the_grid[2, 1])
-        plt.scatter(vac_x, vac_y)
-        plt.plot(vac_x, vac_x, linestyle="-.", c="black")
-        title = "(h) " + str(round(r2_score(vac_x, vac_y), 2))
-        plt.title(title)
-        plt.xlabel("$E_{vac}$-DFT (eV)")
-        plt.ylabel("$E_{vac}$-ML (eV)")
-
-        # Plot surface energy
-        surf_x = np.array(df["surf_en_entry"].iloc[0].split(";"), dtype=float)
-        surf_y = np.array(df["surf_en"].iloc[0].split(";"), dtype=float)
-        plt.subplot(the_grid[2, 2])
-        plt.scatter(surf_x, surf_y)
-        plt.plot(surf_x, surf_x, linestyle="-.", c="black")
-        title = "(i) " + str(round(r2_score(surf_x, surf_y), 2))
-        plt.title(title)
-        plt.xlabel("$E_{surf}$-DFT (J/m2)")
-        plt.ylabel("$E_{surf}$-ML (J/m2)")
-
-        plt.tight_layout()
-        pname = fname.replace("dat.csv", "dat.png")
-        plt.savefig(pname)
-        plt.close()
 
 def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_file):
     composite_error_data = {}
