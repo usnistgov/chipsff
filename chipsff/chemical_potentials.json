@@ -61,7 +61,8 @@
         "energy_chgnet": -3.8214735,
         "energy_matgl": -3.8210865,
         "energy_mace": -3.8594375,
-        "energy_sevennet": -3.860356
+        "energy_sevennet": -3.860356,
+        "energy_eqV2_153M_omat": -3.9059829711914062
     },
     "Br": {
         "jid": "JVASP-840",
@@ -85,7 +86,9 @@
         "energy_chgnet": -5.403327,
         "energy_matgl": -5.35841075,
         "energy_mace": -5.41365725,
-        "energy_sevennet": -5.3782965
+        "energy_sevennet": -5.3782965,
+        "energy_orb-v2": -5.367546081542969,
+        "energy_eqV2_31M_omat_mp_salex": -5.369870662689209
     },
     "Os": {
         "jid": "JVASP-14744",
@@ -101,7 +104,8 @@
         "energy_chgnet": -4.456685,
         "energy_matgl": -4.5874235,
         "energy_mace": -4.5258085,
-        "energy_sevennet": -4.577574
+        "energy_sevennet": -4.577574,
+        "energy_orb": -4.604394435882568
     },
     "Ga": {
         "jid": "JVASP-14622",
@@ -109,7 +113,10 @@
         "energy_chgnet": -3.01915925,
         "energy_matgl": -3.02938625,
         "energy_mace": -3.029211,
-        "energy_sevennet": -3.0231815
+        "energy_sevennet": -3.0231815,
+        "energy_orb-v2": -3.017676830291748,
+        "energy_eqV2_31M_omat_mp_salex": -3.0275492668151855,
+        "energy_eqV2_153M_omat": -2.9102883338928223
     },
     "Pr": {
         "jid": "JVASP-969",
@@ -221,7 +228,10 @@
         "energy_chgnet": -1.596146,
         "energy_matgl": -1.5950905,
         "energy_mace": -1.6067645,
-        "energy_sevennet": -1.6045245
+        "energy_sevennet": -1.6045245,
+        "energy_eqV2_153M_omat": -1.5255053043365479,
+        "energy_eqV2_86M_omat_mp_salex": -1.6003966331481934,
+        "energy_eqV2_86M_omat": -1.507230281829834
     },
     "K": {
         "jid": "JVASP-25114",
@@ -245,7 +255,10 @@
         "energy_chgnet": -4.93406625,
         "energy_matgl": -4.92246625,
         "energy_mace": -5.090092625,
-        "energy_sevennet": -4.922183
+        "energy_sevennet": -4.922183,
+        "energy_matgl-direct": -4.7984819412231445,
+        "energy_eqV2_31M_omat": -4.937220573425293,
+        "energy_eqV2_86M_omat": -4.917907238006592
     },
     "S": {
         "jid": "JVASP-95268",
@@ -277,7 +290,8 @@
         "energy_chgnet": -8.510046,
         "energy_matgl": -8.487857,
         "energy_mace": -8.5319785,
-        "energy_sevennet": -8.5710905
+        "energy_sevennet": -8.5710905,
+        "energy_matgl-direct": -8.500523567199707
     },
     "Er": {
         "jid": "JVASP-102277",
@@ -301,7 +315,8 @@
         "energy_chgnet": -1.2953955,
         "energy_matgl": -1.290621,
         "energy_mace": -1.3133655,
-        "energy_sevennet": -1.309338
+        "energy_sevennet": -1.309338,
+        "energy_eqV2_31M_omat_mp_salex": -1.3088359832763672
     },
     "Nb": {
         "jid": "JVASP-934",
@@ -309,7 +324,10 @@
         "energy_chgnet": -10.025986,
         "energy_matgl": -10.059839,
         "energy_mace": -10.085746,
-        "energy_sevennet": -10.094292
+        "energy_sevennet": -10.094292,
+        "energy_matgl-direct": -10.110954284667969,
+        "energy_eqV2_86M_omat": -10.105196952819824,
+        "energy_eqV2_86M_omat_mp_salex": -10.082010269165039
     },
     "Nd": {
         "jid": "JVASP-937",
@@ -341,7 +359,9 @@
         "energy_chgnet": -6.5688657500000005,
         "energy_matgl": -6.606697083333334,
         "energy_mace": -6.587750083333333,
-        "energy_sevennet": -6.631985333333334
+        "energy_sevennet": -6.631985333333334,
+        "energy_orb-v2": -6.671705881754558,
+        "energy_eqV2_31M_omat_mp_salex": -6.678377151489258
     },
     "F": {
         "jid": "JVASP-33718",
@@ -357,7 +377,9 @@
         "energy_chgnet": -8.35449975,
         "energy_matgl": -8.32737725,
         "energy_mace": -8.3102885,
-        "energy_sevennet": -8.31863125
+        "energy_sevennet": -8.31863125,
+        "energy_orb-v2": -8.305495262145996,
+        "energy_eqV2_31M_omat_mp_salex": -8.321784019470215
     },
     "Kr": {
         "jid": "JVASP-25213",
@@ -373,7 +395,12 @@
         "energy_chgnet": -5.3138255,
         "energy_matgl": -5.4190405,
         "energy_mace": -5.3420265,
-        "energy_sevennet": -5.402981
+        "energy_sevennet": -5.402981,
+        "energy_orb": -5.414383888244629,
+        "energy_matgl-direct": -5.417365074157715,
+        "energy_orb-v2": -5.422999382019043,
+        "energy_eqV2_31M_omat": -5.4385528564453125,
+        "energy_eqV2_86M_omat": -5.423131942749023
     },
     "Sn": {
         "jid": "JVASP-14601",
@@ -413,7 +440,9 @@
         "energy_chgnet": -4.0672785,
         "energy_matgl": -4.1050825,
         "energy_mace": -4.0842765,
-        "energy_sevennet": -4.1083495
+        "energy_sevennet": -4.1083495,
+        "energy_eqV2_86M_omat": -4.151491165161133,
+        "energy_eqV2_153M_omat": -4.145965099334717
     },
     "Se": {
         "jid": "JVASP-7804",
@@ -429,7 +458,8 @@
         "energy_chgnet": -7.0292245,
         "energy_matgl": -7.1024915,
         "energy_mace": -7.0844295,
-        "energy_sevennet": -7.073042
+        "energy_sevennet": -7.073042,
+        "energy_eqV2_153M_omat": -7.039812088012695
     },
     "Cl": {
         "jid": "JVASP-25104",
@@ -485,7 +515,8 @@
         "energy_chgnet": -4.083517,
         "energy_matgl": -4.096651,
         "energy_mace": -4.08482,
-        "energy_sevennet": -4.096196
+        "energy_sevennet": -4.096196,
+        "energy_eqV2_31M_omat_mp_salex": -4.1000871658325195
     },
     "La": {
         "jid": "JVASP-910",
@@ -525,7 +556,8 @@
         "energy_chgnet": -7.7862876666666665,
         "energy_matgl": -7.875901666666667,
         "energy_mace": -7.816422666666667,
-        "energy_sevennet": -7.815967666666666
+        "energy_sevennet": -7.815967666666666,
+        "energy_orb": -7.891704559326172
     },
     "Te": {
         "jid": "JVASP-25210",
@@ -533,7 +565,8 @@
         "energy_chgnet": -3.1693719999999996,
         "energy_matgl": -3.142266,
         "energy_mace": -3.099973,
-        "energy_sevennet": -3.0926693333333333
+        "energy_sevennet": -3.0926693333333333,
+        "energy_eqV2_86M_omat": -3.1516879399617515
     },
     "Tb": {
         "jid": "JVASP-1017",
@@ -581,7 +614,9 @@
         "energy_chgnet": -1.5900875,
         "energy_matgl": -1.51894975,
         "energy_mace": -1.7035675,
-        "energy_sevennet": -1.50836475
+        "energy_sevennet": -1.50836475,
+        "energy_matgl-direct": -1.486575961112976,
+        "energy_eqV2_153M_omat": -1.4833157062530518
     },
     "U": {
         "jid": "JVASP-14725",
@@ -629,7 +664,11 @@
         "energy_chgnet": -3.664113,
         "energy_matgl": -3.701539,
         "energy_mace": -3.728351,
-        "energy_sevennet": -3.719476
+        "energy_sevennet": -3.719476,
+        "energy_orb": -3.7389092445373535,
+        "energy_eqV2_31M_omat_mp_salex": -3.7384281158447266,
+        "energy_eqV2_153M_omat": -3.734297275543213,
+        "energy_eqV2_86M_omat": -3.74300217628479
     },
     "As": {
         "jid": "JVASP-14603",
@@ -661,7 +700,8 @@
         "energy_chgnet": -2.699644,
         "energy_matgl": -2.71128,
         "energy_mace": -2.705124,
-        "energy_sevennet": -2.715821
+        "energy_sevennet": -2.715821,
+        "energy_orb-v2": -2.7198359966278076
     },
     "Mo": {
         "jid": "JVASP-21195",
