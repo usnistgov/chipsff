@@ -1,0 +1,30 @@
+{
+  "jid": "JVASP-1002",
+  "calculator_type": "alignn_ff",
+  "chemical_potentials_file": "chemical_potentials.json",
+  "properties_to_calculate": [
+    "relax_structure",
+    "calculate_ev_curve",
+    "calculate_formation_energy",
+    "calculate_elastic_tensor",
+    "run_phonon_analysis",
+    "analyze_surfaces",
+    "analyze_defects"
+  ],
+  "relaxation_settings": {
+    "fmax": 0.05,
+    "steps": 200
+  },
+  "phonon_settings": {
+    "dim": [2, 2, 2],
+    "distance": 0.2
+  },
+  "surface_indices_list": [
+    [1, 0, 0],
+    [1, 1, 1],
+    [1, 1, 0],
+    [0, 1, 1],
+    [0, 0, 1],
+    [0, 1, 0]
+  ]
+}
