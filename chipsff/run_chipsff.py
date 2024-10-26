@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import os
 import subprocess
 import sys
@@ -28,6 +29,9 @@ import plotly.express as px
 from sklearn.metrics import mean_absolute_error, r2_score
 from matplotlib.gridspec import GridSpec
 import argparse
+from jarvis.db.jsonutils import loadjson
+from .config import CHIPSFFConfig
+#from chipsff.config import CHIPSFFConfig
 
 dft_3d = data("dft_3d")
 vacancydb = data("vacancydb")
@@ -195,12 +199,29 @@ class MaterialsAnalyzer:
         substrate_jid=None,
         film_index=None,
         substrate_index=None,
+        relaxation_settings=None,
+        phonon_settings=None,
+        properties_to_calculate=None,
+        surface_indices_list=None,
     ):
-        self.calculator_type = calculator_type  # Ensure calculator_type is stored in self
-        self.film_jid = None
-        self.substrate_jid = None
-        self.film_index = None
-        self.substrate_index = None
+        self.calculator_type = calculator_type
+        self.chemical_potentials_file = chemical_potentials_file
+        self.relaxation_settings = relaxation_settings or {'fmax': 0.05, 'steps': 200}
+        self.phonon_settings = phonon_settings or {'dim': [2, 2, 2], 'distance': 0.2}
+        self.properties_to_calculate = properties_to_calculate or []
+        if surface_indices_list is None:
+            self.surface_indices_list = [
+                [1, 0, 0],
+                [1, 1, 1],
+                [1, 1, 0],
+                [0, 1, 1],
+                [0, 0, 1],
+                [0, 1, 0],
+            ]
+        else:
+            self.surface_indices_list = surface_indices_list
+        self.film_index = film_index or "1_1_0"
+        self.substrate_index = substrate_index or "1_1_0"
 
         if jid:
             self.jid = jid
@@ -215,10 +236,9 @@ class MaterialsAnalyzer:
             # Initialize job_info dictionary
             self.job_info = {
                 "jid": jid,
-                "calculator_type": calculator_type
+                "calculator_type": calculator_type,
             }
             self.calculator = self.setup_calculator()
-            self.chemical_potentials_file = chemical_potentials_file
             self.chemical_potentials = self.load_chemical_potentials()
         elif film_jid and substrate_jid:
             # Ensure film_jid and substrate_jid are strings, not lists
@@ -230,29 +250,36 @@ class MaterialsAnalyzer:
             self.film_jid = film_jid
             self.substrate_jid = substrate_jid
 
-            # Ensure film_index and substrate_index have default values
-            self.film_index = film_index if film_index else "1_1_0"
-            self.substrate_index = substrate_index if substrate_index else "1_1_0"
-
             # Include Miller indices in directory and file names
             self.output_dir = f"Interface_{film_jid}_{self.film_index}_{substrate_jid}_{self.substrate_index}_{calculator_type}"
             os.makedirs(self.output_dir, exist_ok=True)
             self.log_file = os.path.join(
                 self.output_dir,
-                f"Interface_{film_jid}_{self.film_index}_{substrate_jid}_{self.substrate_index}_job_log.txt"
+                f"Interface_{film_jid}_{self.film_index}_{substrate_jid}_{self.substrate_index}_job_log.txt",
             )
             self.job_info = {
                 "film_jid": film_jid,
                 "substrate_jid": substrate_jid,
                 "film_index": self.film_index,
                 "substrate_index": self.substrate_index,
-                "calculator_type": calculator_type
+                "calculator_type": calculator_type,
             }
             self.calculator = self.setup_calculator()
-            self.chemical_potentials_file = chemical_potentials_file
             self.chemical_potentials = self.load_chemical_potentials()
         else:
             raise ValueError("Either 'jid' or both 'film_jid' and 'substrate_jid' must be provided.")
+
+        # Set up the logger
+        self.setup_logger()
+
+    def setup_logger(self):
+        import logging
+        self.logger = logging.getLogger(self.jid or f"{self.film_jid}_{self.substrate_jid}")
+        self.logger.setLevel(logging.INFO)
+        fh = logging.FileHandler(self.log_file)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        fh.setFormatter(formatter)
+        self.logger.addHandler(fh)
 
     def log(self, message):
         """Log information to the job log file."""
@@ -513,7 +540,7 @@ class MaterialsAnalyzer:
         phonopy_bands_figname = f"ph_{self.jid}_{self.calculator_type}.png"
 
         # Phonon generation parameters
-        dim = [2, 2, 2]
+        dim = self.phonon_settings.get('dim', [2, 2, 2])
         # Define the conversion factor from THz to cm^-1
         THz_to_cm = 33.35641  # 1 THz = 33.35641 cm^-1
 
@@ -522,7 +549,7 @@ class MaterialsAnalyzer:
         thermal_props_filename = "thermal_properties.txt"
         write_fc = True
         min_freq_tol_cm = -5.0  # in cm^-1
-        distance = 0.2
+        distance = self.phonon_settings.get('distance', 0.2)
 
         # Generate k-point path
         kpoints = Kpoints().kpath(relaxed_atoms, line_density=5)
@@ -857,13 +884,14 @@ class MaterialsAnalyzer:
 
     def analyze_surfaces(
             self,
-            indices_list=[[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]],
+            indices_list=None
         ):
         """
         Perform surface analysis by generating surface structures, relaxing them, and calculating surface energies.
         """
         self.log(f"Analyzing surfaces for {self.jid}")
-
+        if indices_list is None:
+            indices_list = self.surface_indices_list
         for indices in indices_list:
             # Generate surface and check for polarity
             surface = (
@@ -1557,157 +1585,178 @@ class MaterialsAnalyzer:
     import os
 
     def run_all(self):
-        """Run all analyses in sequence and output results in the required JSON format."""
-        # Initialize lists to store errors and other data
-        timings = []
-        error_dat = {}
-
+        """Run selected analyses based on configuration."""
         # Start timing the entire run
         start_time = time.time()
 
-        # Relax the structure
-        relaxed_atoms = self.relax_structure()
+        # Relax the structure if specified
+        if 'relax_structure' in self.properties_to_calculate:
+            relaxed_atoms = self.relax_structure()
+        else:
+            relaxed_atoms = self.atoms
+
+        # Proceed only if the structure is relaxed or original atoms are used
+        if relaxed_atoms is None:
+            self.log("Relaxation did not converge. Exiting.")
+            return
 
         # Lattice parameters before and after relaxation
         lattice_initial = self.atoms.lattice
         lattice_final = relaxed_atoms.lattice
 
-        # Bulk modulus (E-V curve)
-        _, _, _, _, bulk_modulus, _, _ = self.calculate_ev_curve(relaxed_atoms)
-        kv_entry = self.reference_data.get("bulk_modulus_kv", 0)
+        # Prepare final results dictionary
+        final_results = {}
+
+        # Initialize variables for error calculation
+        err_a = err_b = err_c = err_vol = err_form = err_kv = err_c11 = err_c44 = err_surf_en = err_vac_en = np.nan
+        form_en_entry = kv_entry = c11_entry = c44_entry = 0
+
+        # Calculate E-V curve and bulk modulus if specified
+        if 'calculate_ev_curve' in self.properties_to_calculate:
+            _, _, _, _, bulk_modulus, _, _ = self.calculate_ev_curve(relaxed_atoms)
+            kv_entry = self.reference_data.get("bulk_modulus_kv", 0)
+            final_results['modulus'] = {
+                'kv': bulk_modulus,
+                'kv_entry': kv_entry
+            }
+            err_kv = mean_absolute_error([kv_entry], [bulk_modulus]) if bulk_modulus is not None else np.nan
 
         # Formation energy
-        formation_energy = self.calculate_formation_energy(relaxed_atoms)
-        form_en_entry = self.reference_data.get("formation_energy_peratom", 0)
+        if 'calculate_formation_energy' in self.properties_to_calculate:
+            formation_energy = self.calculate_formation_energy(relaxed_atoms)
+            form_en_entry = self.reference_data.get("formation_energy_peratom", 0)
+            final_results['form_en'] = {
+                'form_energy': formation_energy,
+                'form_energy_entry': form_en_entry
+            }
+            err_form = mean_absolute_error([form_en_entry], [formation_energy])
 
         # Elastic tensor
-        elastic_tensor = self.calculate_elastic_tensor(relaxed_atoms)
-        c11_entry = self.reference_data.get("elastic_tensor", [[0]])[0][0]
-        c44_entry = self.reference_data.get("elastic_tensor", [[0, 0, 0, [0, 0, 0, 0]]])[3][3]
-        phonon, zpe = self.run_phonon_analysis(relaxed_atoms)
+        if 'calculate_elastic_tensor' in self.properties_to_calculate:
+            elastic_tensor = self.calculate_elastic_tensor(relaxed_atoms)
+            c11_entry = self.reference_data.get("elastic_tensor", [[0]])[0][0]
+            c44_entry = self.reference_data.get("elastic_tensor", [[0, 0, 0, [0, 0, 0, 0]]])[3][3]
+            final_results['elastic_tensor'] = {
+                'c11': elastic_tensor.get("C_11", 0),
+                'c44': elastic_tensor.get("C_44", 0),
+                'c11_entry': c11_entry,
+                'c44_entry': c44_entry
+            }
+            err_c11 = mean_absolute_error([c11_entry], [elastic_tensor.get("C_11", np.nan)])
+            err_c44 = mean_absolute_error([c44_entry], [elastic_tensor.get("C_44", np.nan)])
+
+        # Phonon analysis
+        if 'run_phonon_analysis' in self.properties_to_calculate:
+            phonon, zpe = self.run_phonon_analysis(relaxed_atoms)
+            final_results['zpe'] = zpe
+        else:
+            zpe = None
+
         # Surface energy analysis
-        self.analyze_surfaces()
-        surf_en, surf_en_entry = [], []
-        surface_entries = get_surface_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
-
-        for indices in [[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]]:
-            surface_name = f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}"
-            calculated_surface_energy = self.job_info.get(surface_name, 0)
-
-            try:
-                # Try to match the surface entry
-                matching_entry = next((entry for entry in surface_entries if entry['name'].strip() == surface_name.strip()), None)
-
-                if matching_entry and calculated_surface_energy != 0 and matching_entry["surf_en_entry"] != 0:
-                    surf_en.append(calculated_surface_energy)
-                    surf_en_entry.append(matching_entry["surf_en_entry"])
-                else:
-                    print(f"No valid matching entry found for {surface_name}")
-            except Exception as e:
-                # Handle the exception, log it, and continue
-                print(f"Error processing surface {surface_name}: {e}")
-                # Optionally log more details or store the error for later inspection
-                self.log(f"Error processing surface {surface_name}: {str(e)}")
-                continue  # Skip this surface and move to the next one
+        if 'analyze_surfaces' in self.properties_to_calculate:
+            self.analyze_surfaces(indices_list=self.surface_indices_list)
+            surf_en, surf_en_entry = [], []
+            surface_entries = get_surface_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
+            for indices in self.surface_indices_list:
+                surface_name = f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}"
+                calculated_surface_energy = self.job_info.get(surface_name, 0)
+                try:
+                    # Try to match the surface entry
+                    matching_entry = next(
+                        (entry for entry in surface_entries if entry['name'].strip() == surface_name.strip()),
+                        None
+                    )
+                    if matching_entry and calculated_surface_energy != 0 and matching_entry["surf_en_entry"] != 0:
+                        surf_en.append(calculated_surface_energy)
+                        surf_en_entry.append(matching_entry["surf_en_entry"])
+                    else:
+                        print(f"No valid matching entry found for {surface_name}")
+                except Exception as e:
+                    # Handle the exception, log it, and continue
+                    print(f"Error processing surface {surface_name}: {e}")
+                    self.log(f"Error processing surface {surface_name}: {str(e)}")
+                    continue  # Skip this surface and move to the next one
+            final_results['surface_energy'] = [
+                {
+                    "name": f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}",
+                    "surf_en": se,
+                    "surf_en_entry": see
+                }
+                for se, see, indices in zip(surf_en, surf_en_entry, self.surface_indices_list)
+            ]
+            err_surf_en = mean_absolute_error(surf_en_entry, surf_en) if surf_en else np.nan
 
         # Vacancy energy analysis
-        self.analyze_defects()
-        vac_en, vac_en_entry = [], []
-        vacancy_entries = get_vacancy_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
-
-        # Assuming this is the part where you encounter the issue
-        for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1):
-            defect_name = f"{self.jid}_{defect.to_dict()['symbol']}"
-            vacancy_energy = self.job_info.get(f"vacancy_formation_energy for {defect_name}", 0)
-
-            try:
-                # Try to match the vacancy entry
-                matching_entry = next((entry for entry in vacancy_entries if entry['symbol'] == defect_name), None)
-
-                if matching_entry and vacancy_energy != 0 and matching_entry['vac_en_entry'] != 0:
-                    vac_en.append(vacancy_energy)
-                    vac_en_entry.append(matching_entry['vac_en_entry'])
-                else:
-                    print(f"No valid matching entry found for {defect_name}")
-            except Exception as e:
-                # Handle the exception, log it, and continue
-                print(f"Error processing defect {defect_name}: {e}")
-                # Optionally log more details or store the error for later inspection
-                self.log(f"Error processing defect {defect_name}: {str(e)}")
-                continue  # Skip this defect and move to the next one
-
-        if self.film_jid and self.substrate_jid:
-            self.analyze_interfaces()
-            
-        self.run_phonon3_analysis(relaxed_atoms)
-        self.calculate_thermal_expansion(relaxed_atoms)
-        quenched_atoms = self.general_melter(relaxed_atoms)
-
-        # Create final results dictionary
-        final_results = {
-            "energy": {
-                "initial_a": lattice_initial.a,
-                "initial_b": lattice_initial.b,
-                "initial_c": lattice_initial.c,
-                "initial_vol": lattice_initial.volume,
-                "final_a": lattice_final.a,
-                "final_b": lattice_final.b,
-                "final_c": lattice_final.c,
-                "final_vol": lattice_final.volume,
-                "energy": self.job_info.get("final_energy_structure", 0)
-            },
-            "form_en": {
-                "form_energy": formation_energy,
-                "form_energy_entry": form_en_entry
-            },
-            "elastic_tensor": {
-                "c11": elastic_tensor.get("C_11", 0),
-                "c44": elastic_tensor.get("C_44", 0),
-                "c11_entry": c11_entry,
-                "c44_entry": c44_entry
-            },
-            "modulus": {
-                "kv": bulk_modulus,
-                "kv_entry": kv_entry
-            },
-            "surface_energy": [
-                {"name": f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}", 
-                 "surf_en": se, 
-                 "surf_en_entry": see} 
-                for se, see, indices in zip(surf_en, surf_en_entry, [[1, 0, 0], [1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 0, 1], [0, 1, 0]])
-            ],
-            "vacancy_energy": [
+        if 'analyze_defects' in self.properties_to_calculate:
+            self.analyze_defects()
+            vac_en, vac_en_entry = [], []
+            vacancy_entries = get_vacancy_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
+            for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1):
+                defect_name = f"{self.jid}_{defect.to_dict()['symbol']}"
+                vacancy_energy = self.job_info.get(f"vacancy_formation_energy for {defect_name}", 0)
+                try:
+                    # Try to match the vacancy entry
+                    matching_entry = next(
+                        (entry for entry in vacancy_entries if entry['symbol'] == defect_name),
+                        None
+                    )
+                    if matching_entry and vacancy_energy != 0 and matching_entry['vac_en_entry'] != 0:
+                        vac_en.append(vacancy_energy)
+                        vac_en_entry.append(matching_entry['vac_en_entry'])
+                    else:
+                        print(f"No valid matching entry found for {defect_name}")
+                except Exception as e:
+                    # Handle the exception, log it, and continue
+                    print(f"Error processing defect {defect_name}: {e}")
+                    self.log(f"Error processing defect {defect_name}: {str(e)}")
+                    continue  # Skip this defect and move to the next one
+            final_results['vacancy_energy'] = [
                 {"name": ve_name, "vac_en": ve, "vac_en_entry": vee}
                 for ve_name, ve, vee in zip(
-                    [f"{self.jid}_{defect.to_dict()['symbol']}" for defect in Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1)], 
-                    vac_en, 
+                    [f"{self.jid}_{defect.to_dict()['symbol']}" for defect in Vacancy(self.atoms).generate_defects(
+                        on_conventional_cell=True, enforce_c_size=8, extend=1
+                    )],
+                    vac_en,
                     vac_en_entry
                 )
-            ],
-            "zpe": zpe
+            ]
+            err_vac_en = mean_absolute_error(vac_en_entry, vac_en) if vac_en else np.nan
+
+        # Additional analyses
+        if 'analyze_interfaces' in self.properties_to_calculate and self.film_jid and self.substrate_jid:
+            self.analyze_interfaces()
+
+        if 'run_phonon3_analysis' in self.properties_to_calculate:
+            self.run_phonon3_analysis(relaxed_atoms)
+
+        if 'calculate_thermal_expansion' in self.properties_to_calculate:
+            self.calculate_thermal_expansion(relaxed_atoms)
+
+        if 'general_melter' in self.properties_to_calculate:
+            quenched_atoms = self.general_melter(relaxed_atoms)
+            if 'calculate_rdf' in self.properties_to_calculate:
+                self.calculate_rdf(quenched_atoms)
+
+        # Record lattice parameters
+        final_results['energy'] = {
+            "initial_a": lattice_initial.a,
+            "initial_b": lattice_initial.b,
+            "initial_c": lattice_initial.c,
+            "initial_vol": lattice_initial.volume,
+            "final_a": lattice_final.a,
+            "final_b": lattice_final.b,
+            "final_c": lattice_final.c,
+            "final_vol": lattice_final.volume,
+            "energy": self.job_info.get("final_energy_structure", 0)
         }
 
-        # Write results to a JSON file
-        output_file = os.path.join(self.output_dir, f"{self.jid}_{self.calculator_type}_results.json")
-        save_dict_to_json(final_results, output_file)
-
-        # Calculate error metrics
+        # Error calculations
         err_a = mean_absolute_error([lattice_initial.a], [lattice_final.a])
         err_b = mean_absolute_error([lattice_initial.b], [lattice_final.b])
         err_c = mean_absolute_error([lattice_initial.c], [lattice_final.c])
-        err_form = mean_absolute_error([form_en_entry], [formation_energy])
         err_vol = mean_absolute_error([lattice_initial.volume], [lattice_final.volume])
-        err_kv = mean_absolute_error([kv_entry], [bulk_modulus]) if bulk_modulus is not None else np.nan
-        err_c11 = mean_absolute_error([c11_entry], [elastic_tensor.get("C_11", np.nan)])
-        err_c44 = mean_absolute_error([c44_entry], [elastic_tensor.get("C_44", np.nan)])
 
-        err_surf_en = mean_absolute_error(surf_en_entry, surf_en) if surf_en else np.nan
-        err_vac_en = mean_absolute_error(vac_en_entry, vac_en) if vac_en else np.nan
-
-        end_time = time.time()
-        total_time = end_time - start_time
-
-# Create an error dictionary
+        # Create an error dictionary
         error_dat = {
             "err_a": err_a,
             "err_b": err_b,
@@ -1719,10 +1768,32 @@ class MaterialsAnalyzer:
             "err_c44": err_c44,
             "err_surf_en": err_surf_en,
             "err_vac_en": err_vac_en,
-            "time": total_time
+            "time": time.time() - start_time
         }
 
         print("Error metrics calculated:", error_dat)
+
+        # Create a DataFrame for error data
+        df = pd.DataFrame([error_dat])
+
+        # Save the DataFrame to CSV
+        unique_dir = os.path.basename(self.output_dir)
+        fname = os.path.join(self.output_dir, f"{unique_dir}_error_dat.csv")
+        df.to_csv(fname, index=False)
+
+        # Plot the scorecard with errors
+        self.plot_error_scorecard(df)
+
+        # Write results to a JSON file
+        output_file = os.path.join(self.output_dir, f"{self.jid}_{self.calculator_type}_results.json")
+        save_dict_to_json(final_results, output_file)
+
+        # Log total time
+        total_time = error_dat['time']
+        self.log(f"Total time for run: {total_time} seconds")
+
+        return error_dat
+
 
 # Create a DataFrame for error data
         df = pd.DataFrame([error_dat])
@@ -1824,59 +1895,64 @@ jid_list_all = [ 'JVASP-1002', 'JVASP-816', 'JVASP-867', 'JVASP-1029', 'JVASP-86
 #calculator_types = ["alignn_ff_aff307k_lmdb_param_low_rad_use_force_mult_mp_tak4","alignn_ff_v5.27.2024","alignn_ff_aff307k_kNN_2_2_128"]
 
 if __name__ == "__main__":
-    import argparse
-
+    import pprint
     parser = argparse.ArgumentParser(description="Run Materials Analyzer")
-    parser.add_argument("--jid", type=str, help="JID of the material")
-    parser.add_argument("--calculator_type", type=str, help="Type of calculator", required=True)
-    parser.add_argument("--chemical_potentials_file", type=str, default="chemical_potentials.json", help="Chemical potentials JSON file")
-    parser.add_argument("--jid_list", nargs='+', help="List of JIDs")
-    parser.add_argument("--calculator_types", nargs='+', help="List of calculator types")
-    parser.add_argument("--film_jid", nargs='+', help="JID(s) of the film material(s)")
-    parser.add_argument("--substrate_jid", nargs='+', help="JID(s) of the substrate material(s)")
-    parser.add_argument("--film_index", type=str, help="Miller index of the film", default="1_1_0")
-    parser.add_argument("--substrate_index", type=str, help="Miller index of the substrate", default="1_1_0")
-    
+    parser.add_argument("--input_file", default="input.json", type=str, help="Path to the input configuration JSON file")
     args = parser.parse_args()
 
-    # If film_jid is provided, treat it as a list
-    film_jids = args.film_jid if args.film_jid else []
+    input_file = loadjson(args.input_file)
+    input_file_data = CHIPSFFConfig(**input_file)
+    pprint.pprint(input_file_data.dict())
 
-    # If substrate_jid is provided, treat it as a list
-    substrate_jids = args.substrate_jid if args.substrate_jid else []
+    # If film_id is provided, treat it as a list
+    film_jids = input_file_data.film_id if input_file_data.film_id else []
+
+    # If substrate_id is provided, treat it as a list
+    substrate_jids = input_file_data.substrate_id if input_file_data.substrate_id else []
 
     # Case 1: Interface calculations with film_jid and substrate_jid
     if film_jids and substrate_jids:
         # Loop through all film and substrate JIDs and perform interface analysis
         for film_jid, substrate_jid in zip(film_jids, substrate_jids):
-            print(f"Analyzing interface between {film_jid} and {substrate_jid} with {args.calculator_type}...")
+            print(f"Analyzing interface between {film_jid} and {substrate_jid} with {input_file_data.calculator_type}...")
             analyzer = MaterialsAnalyzer(
-                calculator_type=args.calculator_type,
-                chemical_potentials_file=args.chemical_potentials_file,
+                calculator_type=input_file_data.calculator_type,
+                chemical_potentials_file=input_file_data.chemical_potentials_file,
                 film_jid=film_jid,
                 substrate_jid=substrate_jid,
-                film_index=args.film_index,
-                substrate_index=args.substrate_index,
+                film_index=input_file_data.film_index,
+                substrate_index=input_file_data.substrate_index,
+                relaxation_settings=input_file_data.relaxation_settings,
+                phonon_settings=input_file_data.phonon_settings,
+                properties_to_calculate=input_file_data.properties_to_calculate,
             )
             analyzer.analyze_interfaces()
 
     # Case 2: Single JID provided
-    elif args.jid and args.calculator_type:
-        print(f"Analyzing {args.jid} with {args.calculator_type}...")
+    elif input_file_data.jid and input_file_data.calculator_type:
+        print(f"Analyzing {input_file_data.jid} with {input_file_data.calculator_type}...")
         analyzer = MaterialsAnalyzer(
-            jid=args.jid,
-            calculator_type=args.calculator_type,
-            chemical_potentials_file=args.chemical_potentials_file,
+            jid=input_file_data.jid,
+            calculator_type=input_file_data.calculator_type,
+            chemical_potentials_file=input_file_data.chemical_potentials_file,
+            relaxation_settings=input_file_data.relaxation_settings,
+            phonon_settings=input_file_data.phonon_settings,
+            properties_to_calculate=input_file_data.properties_to_calculate,
+            surface_indices_list=input_file_data.surface_indices_list,
         )
         analyzer.run_all()
 
     # Case 3: Multiple JIDs and calculator types provided (batch processing)
-    elif args.jid_list and args.calculator_types:
+    elif input_file_data.jid_list and input_file_data.calculator_types:
         analyze_multiple_structures(
-            jid_list=args.jid_list,
-            calculator_types=args.calculator_types,
-            chemical_potentials_file=args.chemical_potentials_file,
+            jid_list=input_file_data.jid_list,
+            calculator_types=input_file_data.calculator_types,
+            chemical_potentials_file=input_file_data.chemical_potentials_file,
+            relaxation_settings=input_file_data.relaxation_settings,
+            phonon_settings=input_file_data.phonon_settings,
+            properties_to_calculate=input_file_data.properties_to_calculate,
+            surface_indices_list=input_file_data.surface_indices_list,
         )
 
     else:
-        print("Please provide valid arguments for either single JID calculation or interface analysis.")
+        print("Please provide valid arguments in the configuration file.")
