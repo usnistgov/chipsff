@@ -19,3 +19,4 @@ class CHIPSFFConfig(BaseSettings):
     phonon_settings: Optional[dict] = None
     properties_to_calculate: Optional[List[str]] = None
     surface_indices_list: Optional[List[List[int]]] = None
+    use_conventional_cell: Optional[bool] = False
