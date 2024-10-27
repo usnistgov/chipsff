@@ -202,8 +202,10 @@ class MaterialsAnalyzer:
         phonon_settings=None,
         properties_to_calculate=None,
         surface_indices_list=None,
+        use_conventional_cell=False,
     ):
         self.calculator_type = calculator_type
+        self.use_conventional_cell = use_conventional_cell
         self.chemical_potentials_file = chemical_potentials_file
         self.relaxation_settings = relaxation_settings or {'fmax': 0.05, 'steps': 200}
         self.phonon_settings = phonon_settings or {'dim': [2, 2, 2], 'distance': 0.2}
@@ -325,20 +327,28 @@ class MaterialsAnalyzer:
         """Perform structure relaxation and log the process."""
         self.log(f"Starting relaxation for {self.jid}")
 
+        # Use conventional cell if specified
+        atoms_to_relax = self.atoms
+        if self.use_conventional_cell:
+            self.log("Using conventional cell for relaxation.")
+            atoms_to_relax = self.atoms.get_conventional_atoms  # or appropriate method
+
         # Convert atoms to ASE format and assign the calculator
-        ase_atoms = self.atoms.ase_converter()
+        ase_atoms = atoms_to_relax.ase_converter()
         ase_atoms.calc = self.calculator
         ase_atoms = ExpCellFilter(ase_atoms)
 
-        # Run FIRE optimizer and capture the output
-        final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=0.05, steps=200)
+        # Run FIRE optimizer and capture the output using relaxation settings
+        fmax = self.relaxation_settings.get('fmax', 0.05)
+        steps = self.relaxation_settings.get('steps', 200)
+        final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
         relaxed_atoms = ase_to_atoms(ase_atoms.atoms)
-        converged = nsteps < 200
+        converged = nsteps < steps
 
         # Log the final energy and relaxation status
         self.log(f"Final energy of FIRE optimization for structure: {final_energy}")
         self.log(
-            f"Relaxation {'converged' if converged else 'did not converge'} within 200 steps."
+            f"Relaxation {'converged' if converged else 'did not converge'} within {nsteps} steps."
         )
 
         # Update job info and save the relaxed structure
@@ -348,7 +358,9 @@ class MaterialsAnalyzer:
         self.log(f"Relaxed structure: {relaxed_atoms.to_dict()}")
         save_dict_to_json(self.job_info, self.get_job_info_filename())
 
-        return relaxed_atoms
+        return relaxed_atoms if converged else None
+
+
 
     def calculate_formation_energy(self, relaxed_atoms):
         """
@@ -1587,7 +1599,11 @@ class MaterialsAnalyzer:
         """Run selected analyses based on configuration."""
         # Start timing the entire run
         start_time = time.time()
-
+        if self.use_conventional_cell:
+            self.log("Using conventional cell for analysis.")
+            atoms_to_relax = self.atoms.get_conventional_atoms
+        else:
+            atoms_to_relax = self.atoms
         # Relax the structure if specified
         if 'relax_structure' in self.properties_to_calculate:
             relaxed_atoms = self.relax_structure()
@@ -1600,7 +1616,7 @@ class MaterialsAnalyzer:
             return
 
         # Lattice parameters before and after relaxation
-        lattice_initial = self.atoms.lattice
+        lattice_initial = atoms_to_relax.lattice
         lattice_final = relaxed_atoms.lattice
 
         # Prepare final results dictionary
@@ -1938,6 +1954,7 @@ if __name__ == "__main__":
             phonon_settings=input_file_data.phonon_settings,
             properties_to_calculate=input_file_data.properties_to_calculate,
             surface_indices_list=input_file_data.surface_indices_list,
+            use_conventional_cell=input_file_data.use_conventional_cell,
         )
         analyzer.run_all()
 
@@ -1951,6 +1968,7 @@ if __name__ == "__main__":
             phonon_settings=input_file_data.phonon_settings,
             properties_to_calculate=input_file_data.properties_to_calculate,
             surface_indices_list=input_file_data.surface_indices_list,
+            use_conventional_cell=input_file_data.use_conventional_cell,
         )
 
     else:
