@@ -50,3 +50,13 @@ pip install -r requirements.txt
 - `fairchem`
 
 **Note**: Some calculators may have additional dependencies or require specific versions of libraries. Please refer to their respective documentation for setup instructions.
+
+## Usage
+The main script run_chipsff.py provides a command-line interface to perform various materials analyses.
+
+**1. Single Material Analysis**
+To run an analysis on a single material by specifying its JID (JARVIS ID) and calculator type (uMLFF):
+```bash
+python chipsff.py --input_file input.json
+```
+An example input.json file 
