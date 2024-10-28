@@ -31,7 +31,7 @@ The following libraries and tools are required:
 - `jarvis-tools`
 - `h5py`
 - `plotly`
-- `ruamel.yaml`
+- `ruamel`
 
 You can install all dependencies by running:
 
