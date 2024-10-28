@@ -20,3 +20,7 @@ class CHIPSFFConfig(BaseSettings):
     properties_to_calculate: Optional[List[str]] = None
     surface_indices_list: Optional[List[List[int]]] = None
     use_conventional_cell: Optional[bool] = False
+    surface_relaxation_settings: Optional[dict] = None
+    defect_relaxation_settings: Optional[dict] = None
+    phonon3_settings: Optional[dict] = None
+    md_settings: Optional[dict] = None
