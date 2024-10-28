@@ -52,11 +52,83 @@ pip install -r requirements.txt
 **Note**: Some calculators may have additional dependencies or require specific versions of libraries. Please refer to their respective documentation for setup instructions.
 
 ## Usage
-The main script run_chipsff.py provides a command-line interface to perform various materials analyses.
+The main script `run_chipsff.py` provides a command-line interface to perform various materials analyses.
 
 **1. Single Material Analysis**
 To run an analysis on a single material by specifying its JID (JARVIS ID) and calculator type (uMLFF):
 ```bash
-python chipsff.py --input_file input.json
+python run_chipsff.py --input_file input.json
 ```
-An example input.json file 
+An example `input.json` file: 
+```bash
+{
+  "jid": "JVASP-1002",
+  "calculator_type": "chgnet",
+  "chemical_potentials_file": "chemical_potentials.json",
+  "properties_to_calculate": [
+    "relax_structure",
+    "calculate_ev_curve",
+    "calculate_formation_energy",
+    "calculate_elastic_tensor",
+    "run_phonon_analysis",
+    "analyze_surfaces",
+    "analyze_defects",
+    "run_phonon3_analysis",
+    "general_melter",
+    "calculate_rdf"
+  ],
+"bulk_relaxation_settings": {
+  "filter_type": "ExpCellFilter",
+  "relaxation_settings": {
+    "fmax": 0.05,
+    "steps": 200,
+    "constant_volume": false
+  }
+},
+  "phonon_settings": {
+    "dim": [2, 2, 2],
+    "distance": 0.2
+  },
+  "use_conventional_cell": true,
+  "surface_settings": {
+    "indices_list": [
+      [0, 1, 0],
+      [0,0,1]
+    ],
+    "layers": 4,
+    "vacuum": 18,
+    "relaxation_settings": {
+      "fmax": 0.05,
+      "steps": 200,
+      "constant_volume": true
+    },
+    "filter_type": "ExpCellFilter"
+  },
+  "defect_settings": {
+    "generate_settings": {
+      "on_conventional_cell": true,
+      "enforce_c_size": 8,
+      "extend": 1
+    },
+    "relaxation_settings": {
+      "fmax": 0.05,
+      "steps": 200,
+      "constant_volume": true
+    },
+    "filter_type": "ExpCellFilter"
+  },
+  "phonon3_settings": {
+    "dim": [2, 2, 2],
+    "distance": 0.2
+  },
+  "md_settings": {
+    "dt": 1,
+    "temp0": 35,
+    "nsteps0": 10,
+    "temp1": 200,
+    "nsteps1": 20,
+    "taut": 20,
+    "min_size": 10.0
+  }
+}
+```
