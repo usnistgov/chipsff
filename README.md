@@ -160,3 +160,4 @@ To analyze the interface between two materials:
 ```bash
 python chipsff.py --film_jid <Film_JID> --substrate_jid <Substrate_JID> --calculator_type <calculator_type>
 ```
+
