@@ -39,4 +39,14 @@ You can install all dependencies by running:
 pip install -r requirements.txt
 ```
 
+## Universal MLFFs Implemented
+
+-`alignn_ff`
+-`chgnet`
+-`sevenn`
+-`mace`
+-`matgl`
+-`orb`
+-`fairchem`
+
 **Note**: Some calculators may have additional dependencies or require specific versions of libraries. Please refer to their respective documentation for setup instructions.
