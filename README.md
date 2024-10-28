@@ -18,10 +18,6 @@ The following libraries and tools are required:
 - `jarvis-tools`
 - `phonopy`
 - `phono3py`
-- `alignn-ff`
-- `chgnet`
-- `sevenn`
-- `mace`
 - `pandas`
 - `matplotlib`
 - `numpy`
@@ -32,6 +28,12 @@ You can install all dependencies by running:
 ```bash
 pip install -r requirements.txt
 ```
+## Universal MLFFs Implemented
+- `alignn`
+- `chgnet`
+- `sevenn`
+- `mace`
+- `matgl`
 
 ## Setup
 Clone the repository and install the necessary Python dependencies:
