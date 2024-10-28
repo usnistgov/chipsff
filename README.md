@@ -132,3 +132,16 @@ An example `input.json` file:
   }
 }
 ```
+## Key Methods
+
+`relax_structure()`: Optimizes the atomic structure using the specified calculator and relaxation settings.
+`calculate_formation_energy(relaxed_atoms)`: Computes the formation energy per atom based on the relaxed structure and chemical potentials.
+`calculate_elastic_tensor(relaxed_atoms)`: Calculates the elastic tensor for the relaxed structure.
+`calculate_ev_curve(relaxed_atoms)`: Fits the energy-volume curve using an equation of state to obtain bulk modulus and equilibrium volume.
+`run_phonon_analysis(relaxed_atoms)`: Performs phonon band structure calculations, density of states, and thermal properties using Phonopy.
+`analyze_defects()`: Analyzes vacancy formation energies by generating defects, relaxing them, and calculating formation energies.
+`analyze_surfaces()`: Analyzes surface energies by generating surface structures, relaxing them, and calculating surface energies.
+`run_phonon3_analysis(relaxed_atoms)`: Runs third-order phonon calculations for thermal conductivity using Phono3py.
+`calculate_thermal_expansion(relaxed_atoms)`: Calculates the thermal expansion coefficient using the Quasi-Harmonic Approximation.
+`general_melter(relaxed_atoms)`: Performs MD simulations to melt and quench the structure, then calculates the Radial Distribution Function (RDF).
+`analyze_interfaces()`: Performs interface analysis between film and substrate materials using the `intermat` package.
