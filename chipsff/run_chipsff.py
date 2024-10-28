@@ -30,8 +30,7 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from matplotlib.gridspec import GridSpec
 import argparse
 from jarvis.db.jsonutils import loadjson
-from .config import CHIPSFFConfig
-#from chipsff.config import CHIPSFFConfig
+from chipsff.config import CHIPSFFConfig
 
 dft_3d = data("dft_3d")
 vacancydb = data("vacancydb")
