@@ -37,5 +37,6 @@ You can install all dependencies by running:
 
 ```bash
 pip install -r requirements.txt
+```
 
 **Note**: Some calculators may have additional dependencies or require specific versions of libraries. Please refer to their respective documentation for setup instructions.
