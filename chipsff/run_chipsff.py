@@ -199,37 +199,25 @@ class MaterialsAnalyzer:
         substrate_jid=None,
         film_index=None,
         substrate_index=None,
-        relaxation_settings=None,
+        bulk_relaxation_settings=None,
         phonon_settings=None,
         properties_to_calculate=None,
-        surface_indices_list=None,
         use_conventional_cell=False,
-        surface_relaxation_settings=None,
-        defect_relaxation_settings=None,
+        surface_settings=None,
+        defect_settings=None,
         phonon3_settings=None,
         md_settings=None,
     ):
         self.calculator_type = calculator_type
         self.use_conventional_cell = use_conventional_cell
         self.chemical_potentials_file = chemical_potentials_file
-        self.relaxation_settings = relaxation_settings or {'fmax': 0.05, 'steps': 200}
+        self.bulk_relaxation_settings = bulk_relaxation_settings or {}
         self.phonon_settings = phonon_settings or {'dim': [2, 2, 2], 'distance': 0.2}
         self.properties_to_calculate = properties_to_calculate or []
-        if surface_indices_list is None:
-            self.surface_indices_list = [
-                [1, 0, 0],
-                [1, 1, 1],
-                [1, 1, 0],
-                [0, 1, 1],
-                [0, 0, 1],
-                [0, 1, 0],
-            ]
-        else:
-            self.surface_indices_list = surface_indices_list
+        self.surface_settings = surface_settings or {}
+        self.defect_settings = defect_settings or {}
         self.film_index = film_index or "1_1_0"
         self.substrate_index = substrate_index or "1_1_0"
-        self.surface_relaxation_settings = surface_relaxation_settings or {'fmax': 0.05, 'steps': 200}
-        self.defect_relaxation_settings = defect_relaxation_settings or {'fmax': 0.05, 'steps': 200}
         self.phonon3_settings = phonon3_settings or {'dim': [2, 2, 2], 'distance': 0.2}
         self.md_settings = md_settings or {'dt': 1, 'temp0': 3500, 'nsteps0': 1000, 'temp1': 300, 'nsteps1': 2000, 'taut': 20, 'min_size': 10.0}
         if jid:
@@ -342,13 +330,21 @@ class MaterialsAnalyzer:
             self.atoms = self.atoms.get_conventional_atoms  # or appropriate method
 
         # Convert atoms to ASE format and assign the calculator
+        filter_type = self.bulk_relaxation_settings.get('filter_type', 'ExpCellFilter')
+        relaxation_settings = self.bulk_relaxation_settings.get('relaxation_settings', {})
+        constant_volume = relaxation_settings.get('constant_volume', False)
         ase_atoms = self.atoms.ase_converter()
         ase_atoms.calc = self.calculator
-        ase_atoms = ExpCellFilter(ase_atoms)
+        
+        if filter_type == 'ExpCellFilter':
+            ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
+        else:
+            # Implement other filters if needed
+            pass
 
         # Run FIRE optimizer and capture the output using relaxation settings
-        fmax = self.relaxation_settings.get('fmax', 0.05)
-        steps = self.relaxation_settings.get('steps', 200)
+        fmax = relaxation_settings.get('fmax', 0.05)
+        steps = relaxation_settings.get('steps', 200)
         final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
         relaxed_atoms = ase_to_atoms(ase_atoms.atoms)
         converged = nsteps < steps
@@ -820,9 +816,12 @@ class MaterialsAnalyzer:
     def analyze_defects(self):
         """Analyze defects by generating, relaxing, and calculating vacancy formation energy."""
         self.log("Starting defect analysis...")
-
+        generate_settings = self.defect_settings.get('generate_settings', {})
+        on_conventional_cell = generate_settings.get('on_conventional_cell', True)
+        enforce_c_size = generate_settings.get('enforce_c_size', 8)
+        extend = generate_settings.get('extend', 1)
     # Generate defect structures from the original atoms
-        defect_structures = Vacancy(self.atoms).generate_defects(on_conventional_cell=True, enforce_c_size=8, extend=1)
+        defect_structures = Vacancy(self.atoms).generate_defects(on_conventional_cell=on_conventional_cell, enforce_c_size=enforce_c_size, extend=extend)
 
         for defect in defect_structures:
         # Extract the defect structure and related metadata
@@ -872,11 +871,19 @@ class MaterialsAnalyzer:
     def relax_defect_structure(self, atoms, name):
         """Relax the defect structure and log the process."""
         # Convert atoms to ASE format and assign the calculator
+        filter_type = self.defect_settings.get('filter_type', 'ExpCellFilter')
+        relaxation_settings = self.defect_settings.get('relaxation_settings', {})
+        constant_volume = relaxation_settings.get('constant_volume', True)
         ase_atoms = atoms.ase_converter()
         ase_atoms.calc = self.calculator
-        ase_atoms = ExpCellFilter(ase_atoms, constant_volume=True)
-        fmax = self.defect_relaxation_settings.get('fmax', 0.05)
-        steps = self.defect_relaxation_settings.get('steps', 200)
+
+        if filter_type == 'ExpCellFilter':
+            ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
+        else:
+            # Implement other filters if needed
+            pass
+        fmax = relaxation_settings.get('fmax', 0.05)
+        steps = relaxation_settings.get('steps', 200)
         # Run FIRE optimizer and capture the output
         final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
         relaxed_atoms = ase_to_atoms(ase_atoms.atoms)
@@ -902,20 +909,27 @@ class MaterialsAnalyzer:
 
         return relaxed_atoms if converged else None
 
-    def analyze_surfaces(
-            self,
-            indices_list=None
-        ):
+    def analyze_surfaces(self):
         """
         Perform surface analysis by generating surface structures, relaxing them, and calculating surface energies.
         """
         self.log(f"Analyzing surfaces for {self.jid}")
-        if indices_list is None:
-            indices_list = self.surface_indices_list
+
+        indices_list = self.surface_settings.get('indices_list', [
+            [1, 0, 0],
+            [1, 1, 1],
+            [1, 1, 0],
+            [0, 1, 1],
+            [0, 0, 1],
+            [0, 1, 0],
+        ])
+        layers = self.surface_settings.get('layers', 4)
+        vacuum = self.surface_settings.get('vacuum', 18)
+
         for indices in indices_list:
             # Generate surface and check for polarity
             surface = (
-                Surface(atoms=self.atoms, indices=indices, layers=4, vacuum=18)
+                Surface(atoms=self.atoms, indices=indices, layers=layers, vacuum=vacuum)
                 .make_surface()
                 .center_around_origin()
             )
@@ -985,15 +999,21 @@ class MaterialsAnalyzer:
         """
         Relax the surface structure and log the process.
         """
+        filter_type = self.surface_settings.get('filter_type', 'ExpCellFilter')
+        relaxation_settings = self.surface_settings.get('relaxation_settings', {})
+        constant_volume = relaxation_settings.get('constant_volume', True)
         self.log(f"Starting surface relaxation for {self.jid} with indices {indices}")
         start_time = time.time()
-        fmax = self.surface_relaxation_settings.get('fmax', 0.05)
-        steps = self.surface_relaxation_settings.get('steps', 200)
+        fmax = relaxation_settings.get('fmax', 0.05)
+        steps = relaxation_settings.get('steps', 200)
         # Convert atoms to ASE format and assign the calculator
         ase_atoms = atoms.ase_converter()
         ase_atoms.calc = self.calculator
-        ase_atoms = ExpCellFilter(ase_atoms, constant_volume=True)
-
+        if filter_type == 'ExpCellFilter':
+            ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
+        else:
+        # Implement other filters if needed
+            pass
         # Run FIRE optimizer and capture the output
         final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
         relaxed_atoms = ase_to_atoms(ase_atoms.atoms)
@@ -1682,10 +1702,20 @@ class MaterialsAnalyzer:
 
         # Surface energy analysis
         if 'analyze_surfaces' in self.properties_to_calculate:
-            self.analyze_surfaces(indices_list=self.surface_indices_list)
+            self.analyze_surfaces()
             surf_en, surf_en_entry = [], []
             surface_entries = get_surface_energy_entry(self.jid, collect_data(dft_3d, vacancydb, surface_data))
-            for indices in self.surface_indices_list:
+
+            indices_list = self.surface_settings.get('indices_list', [
+                [1, 0, 0],
+                [1, 1, 1],
+                [1, 1, 0],
+                [0, 1, 1],
+                [0, 0, 1],
+                [0, 1, 0],
+            ])
+
+            for indices in indices_list:
                 surface_name = f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}"
                 calculated_surface_energy = self.job_info.get(surface_name, 0)
                 try:
@@ -1710,7 +1740,7 @@ class MaterialsAnalyzer:
                     "surf_en": se,
                     "surf_en_entry": see
                 }
-                for se, see, indices in zip(surf_en, surf_en_entry, self.surface_indices_list)
+                for se, see, indices in zip(surf_en, surf_en_entry, indices_list)
             ]
             err_surf_en = mean_absolute_error(surf_en_entry, surf_en) if surf_en else np.nan
 
@@ -1950,7 +1980,7 @@ if __name__ == "__main__":
                 substrate_jid=substrate_jid,
                 film_index=input_file_data.film_index,
                 substrate_index=input_file_data.substrate_index,
-                relaxation_settings=input_file_data.relaxation_settings,
+                bulk_relaxation_settings=input_file_data.bulk_relaxation_settings,
                 phonon_settings=input_file_data.phonon_settings,
                 properties_to_calculate=input_file_data.properties_to_calculate,
             )
@@ -1963,13 +1993,12 @@ if __name__ == "__main__":
             jid=input_file_data.jid,
             calculator_type=input_file_data.calculator_type,
             chemical_potentials_file=input_file_data.chemical_potentials_file,
-            relaxation_settings=input_file_data.relaxation_settings,
+            bulk_relaxation_settings=input_file_data.bulk_relaxation_settings,
             phonon_settings=input_file_data.phonon_settings,
             properties_to_calculate=input_file_data.properties_to_calculate,
-            surface_indices_list=input_file_data.surface_indices_list,
             use_conventional_cell=input_file_data.use_conventional_cell,
-            surface_relaxation_settings=input_file_data.surface_relaxation_settings,
-            defect_relaxation_settings=input_file_data.defect_relaxation_settings,
+            surface_settings=input_file_data.surface_settings,
+            defect_settings=input_file_data.defect_settings,
             phonon3_settings=input_file_data.phonon3_settings,
             md_settings=input_file_data.md_settings,
         )
@@ -1981,13 +2010,12 @@ if __name__ == "__main__":
             jid_list=input_file_data.jid_list,
             calculator_types=input_file_data.calculator_types,
             chemical_potentials_file=input_file_data.chemical_potentials_file,
-            relaxation_settings=input_file_data.relaxation_settings,
+            bulk_relaxation_settings=input_file_data.bulk_relaxation_settings,
             phonon_settings=input_file_data.phonon_settings,
             properties_to_calculate=input_file_data.properties_to_calculate,
-            surface_indices_list=input_file_data.surface_indices_list,
             use_conventional_cell=input_file_data.use_conventional_cell,
-            surface_relaxation_settings=input_file_data.surface_relaxation_settings,
-            defect_relaxation_settings=input_file_data.defect_relaxation_settings,
+            surface_settings=input_file_data.surface_settings,
+            defect_settings=input_file_data.defect_settings,
             phonon3_settings=input_file_data.phonon3_settings,
             md_settings=input_file_data.md_settings,
         )
