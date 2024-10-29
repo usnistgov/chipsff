@@ -37,8 +37,8 @@ jobs:
             conda activate chipsff
             #pip install -r requirements.txt
             export CUDA_VISIBLE_DEVICES="-1"
-            pip install -r requirements.txt
-            pip install phonopy flake8 pytest pycodestyle pydocstyle codecov pytest-cov coverage
+            #pip install -r requirements.txt
+            pip install flake8 pytest pycodestyle pydocstyle codecov pytest-cov coverage
             python setup.py develop
             echo 'environment.yml'
             conda env export
