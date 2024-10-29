@@ -69,6 +69,88 @@ The input configuration file is a JSON file that specifies all required settings
 - **`jid_list`** *(list of strings)*: A list of multiple JARVIS IDs for batch analysis (e.g., `["JVASP-1002", "JVASP-816", "JVASP-867"]`). Only used if analyzing multiple materials.
 
 - **`film_id`** and **`substrate_id`** *(list of strings)*: Lists of JARVIS IDs for film and substrate materials, respectively, in an interface analysis (e.g., `["JVASP-1002"]` and `["JVASP-816"]`).
+- **`calculator_type`** *(string)*: Specifies the calculator to use for analysis. Each calculator corresponds to a different machine learning force field or calculation model.
+  
+  Each calculator corresponds to a different machine learning force field or calculation model.
+
+- **`calculator_types`** *(list of strings)*: A list of calculators to use for batch processing (e.g., `["alignn_ff", "chgnet"]`). Only required if analyzing multiple calculators for batch processing.
+
+- **`chemical_potentials_file`** *(string)*: Path to the JSON file containing chemical potentials for elements (e.g., `"chemical_potentials.json"`). Required for formation energy and defect calculations.
+
+### Structural and Interface Settings
+
+- **`film_index`** and **`substrate_index`** *(string)*: Miller indices for the film and substrate in interface analysis, respectively. Example: `"1_1_0"` for both film and substrate.
+
+- **`use_conventional_cell`** *(boolean)*: Determines whether to use a conventional cell for the analysis. Set to `true` to use the conventional cell structure, or `false` for the primitive cell.
+
+### Properties to Calculate
+
+- **`properties_to_calculate`** *(list of strings)*: Specifies which properties to calculate during the analysis. Each string represents a calculation or analysis task. Options include:
+  - `"relax_structure"`: Perform structure relaxation.
+  - `"calculate_formation_energy"`: Calculate formation energy per atom.
+  - `"calculate_ev_curve"`: Fit the energy-volume (E-V) curve.
+  - `"calculate_elastic_tensor"`: Compute the elastic tensor.
+  - `"run_phonon_analysis"`: Run phonon band structure and thermal property calculations.
+  - `"analyze_defects"`: Calculate vacancy formation energies.
+  - `"analyze_surfaces"`: Calculate surface energies.
+  - `"analyze_interfaces"`: Perform interface energy analysis.
+  - `"run_phonon3_analysis"`: Run third-order phonon calculations for thermal conductivity.
+  - `"calculate_thermal_expansion"`: Calculate the thermal expansion coefficient.
+  - `"general_melter"`: Perform MD melting and quenching simulations.
+  - `"calculate_rdf"`: Calculate the Radial Distribution Function (RDF) for a quenched structure.
+
+### Relaxation and Analysis Settings
+
+#### Bulk Relaxation Settings
+
+- **`bulk_relaxation_settings`** *(dictionary)*: Configures the relaxation process for bulk structures. Contains:
+  - **`filter_type`** *(string)*: Specifies the filter type. Options include `"ExpCellFilter"` (expandable cell filter) and other custom filters.
+  - **`relaxation_settings`** *(dictionary)*: Contains relaxation parameters:
+    - **`constant_volume`** *(boolean)*: If `true`, keeps the volume constant during relaxation.
+    - **`fmax`** *(float)*: Convergence criterion for force (e.g., `0.05`).
+    - **`steps`** *(int)*: Maximum number of optimization steps (e.g., `200`).
+
+#### Phonon Settings
+
+- **`phonon_settings`** *(dictionary)*: Configures phonon analysis parameters. Contains:
+  - **`dim`** *(list of integers)*: Specifies the supercell dimensions for phonon calculations (e.g., `[2, 2, 2]`).
+  - **`distance`** *(float)*: Specifies the displacement distance for phonon calculations (e.g., `0.2`).
+
+#### Defect Settings
+
+- **`defect_settings`** *(dictionary)*: Configures defect analysis, including vacancy formation energy calculations. Contains:
+  - **`generate_settings`** *(dictionary)*: Contains parameters for defect generation:
+    - **`on_conventional_cell`** *(boolean)*: If `true`, generates defects on a conventional cell.
+    - **`enforce_c_size`** *(int)*: Minimum size constraint for the c-axis (e.g., `8`).
+    - **`extend`** *(int)*: Extends the unit cell to create a supercell (e.g., `1`).
+  - **`filter_type`** *(string)*: Specifies the filter type used during relaxation.
+  - **`relaxation_settings`** *(dictionary)*: Contains settings similar to `bulk_relaxation_settings` (e.g., `constant_volume`, `fmax`, `steps`).
+
+#### Surface Settings
+
+- **`surface_settings`** *(dictionary)*: Configures surface energy calculations. Contains:
+  - **`indices_list`** *(list of lists of integers)*: Specifies Miller indices for surface orientations (e.g., `[[1, 0, 0], [1, 1, 1]]`).
+  - **`layers`** *(int)*: Number of atomic layers in the surface (e.g., `4`).
+  - **`vacuum`** *(float)*: Vacuum thickness in Ångströms (e.g., `18`).
+  - **`filter_type`** *(string)*: Specifies the filter type used during relaxation.
+  - **`relaxation_settings`** *(dictionary)*: Similar to `bulk_relaxation_settings`.
+
+#### Phonon3 Settings
+
+- **`phonon3_settings`** *(dictionary)*: Configures third-order phonon calculations for thermal conductivity. Contains:
+  - **`dim`** *(list of integers)*: Supercell dimensions (e.g., `[2, 2, 2]`).
+  - **`distance`** *(float)*: Displacement distance (e.g., `0.2`).
+
+#### MD Settings
+
+- **`md_settings`** *(dictionary)*: Configures parameters for MD simulations, specifically for melting and quenching. Contains:
+  - **`dt`** *(float)*: Time step in femtoseconds (e.g., `1`).
+  - **`temp0`** *(float)*: Initial temperature for melting (e.g., `3500` K).
+  - **`nsteps0`** *(int)*: Number of steps for melting phase (e.g., `1000`).
+  - **`temp1`** *(float)*: Final temperature for quenching (e.g., `300` K).
+  - **`nsteps1`** *(int)*: Number of steps for quenching phase (e.g., `2000`).
+  - **`taut`** *(float)*: Temperature coupling parameter (e.g., `20`).
+  - **`min_size`** *(float)*: Minimum cell size in Ångströms (e.g., `10.0`).
 
 ## Usage
 The main script `run_chipsff.py` provides a command-line interface to perform various materials analyses.
