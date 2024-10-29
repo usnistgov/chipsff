@@ -1,5 +1,5 @@
 # chipsff
-
+![CHIPS-FF Schematic](https://github.com/usnistgov/chipsff/tree/main/chipsff/chipsffworkflow.png)
 ## Overview
 
 The `chipsff` repository provides a comprehensive framework for performing materials analysis, including structure relaxation, defect and surface energy calculations, vacancy formation energies, interface analysis, and thermal properties like phonon band structures and elastic tensors. The code supports multiple calculators, including machine learning force fields (MLFFs), and integrates with the JARVIS database and the Atomic Simulation Environment (ASE) to facilitate various materials simulations and calculations.
