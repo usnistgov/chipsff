@@ -75,7 +75,7 @@ The input configuration file is a JSON file that specifies all required settings
 
 - **`calculator_types`** *(list of strings)*: A list of calculators to use for batch processing (e.g., `["alignn_ff", "chgnet"]`). Only required if analyzing multiple calculators for batch processing.
 
-- **`chemical_potentials_file`** *(string)*: Path to the JSON file containing chemical potentials for elements (e.g., `"chemical_potentials.json"`). Required for formation energy and defect calculations.
+- **`chemical_potentials_file`** *(string)*: Path to the JSON file containing chemical potentials for elements (e.g., `"chemical_potentials.json"`). Required for formation energy and defect calculations. If an entry is missing for a particular element or calculator, it will be automatically calculated and stored in the json file.
 
 ### Structural and Interface Settings
 
