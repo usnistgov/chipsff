@@ -1,0 +1,9 @@
+name: chipsff
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - numpy
+  - matplotlib
+  - scipy
+  - jarvis-tools
