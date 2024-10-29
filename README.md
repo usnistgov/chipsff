@@ -7,14 +7,15 @@ The `chipsff` repository provides a comprehensive framework for performing mater
 ## Features
 
 - **Structure Relaxation**: Optimize atomic structures using various calculators and optimization algorithms.
+- **Energy-Volume (E-V) Curve**: Fit the E-V curve using an equation of state (EOS) to obtain bulk modulus and equilibrium energy and volume.
+- **Elastic Properties**: Calculate elastic tensors.
 - **Vacancy and Surface Energy Calculations**: Compute vacancy formation energies and surface energies for specified materials.
 - **Phonon Analysis**: Generate phonon band structures, density of states (DOS), and thermal properties using Phonopy.
-- **Elastic Properties**: Calculate elastic tensors and bulk modulus.
-- **Energy-Volume (E-V) Curve**: Fit the E-V curve using an equation of state (EOS) to obtain bulk modulus and equilibrium volume.
+- **Thermal Conductivity**: Calculate thermal conductivity using third-order phonon calculations from Phono3py. 
 - **Thermal Expansion**: Perform thermal expansion analysis using the Quasi-Harmonic Approximation (QHA).
-- **Defect and Interface Analysis**: Analyze defects and perform interface calculations between different materials.
 - **Molecular Dynamics (MD) Simulations**: Conduct MD simulations to melt and quench structures, and calculate Radial Distribution Functions (RDFs).
 - **Support for Multiple Calculators**: Seamlessly switch between different calculators like `alignn_ff`, `chgnet`, `sevenn`, `mace`, `matgl`, etc.
+- **Automatic Error Calculation**: Direct comparison to density functional theory (DFT) calculations from JARVIS-DFT
 
 ## Requirements
 
