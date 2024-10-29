@@ -1,4 +1,5 @@
 import pytest
+import os
 from chipsff.run_chipsff import MaterialsAnalyzer
 from chipsff.config import CHIPSFFConfig
 from chipsff.run_chipsff import (
