@@ -267,13 +267,14 @@ An example `interface_input.json` file:
 - `analyze_interfaces()`: Performs interface analysis between film and substrate materials using the `intermat` package.
 
 ## How to contribute
-For detailed instructions, please see [Contribution instructions](https://github.com/usnistgov/alignn?tab=readme-ov-file#contrib)
+For detailed instructions, please see [Contribution instructions](https://github.com/usnistgov/jarvis/blob/master/Contribution.rst)
 
 ## Correspondence
-Please report bugs as Github issues (https://github.com/usnistgov/alignn/issues) or email to daniel.wines@nist.gov or kamal.choudhary@nist.gov.
+Please report bugs as Github issues (https://github.com/usnistgov/chipsff/issues) or email to daniel.wines@nist.gov or kamal.choudhary@nist.gov.
 
 ## Funding support
-NIST-MGI (https://www.nist.gov/mgi).
+This work was performed with funding from the CHIPS Metrology Program, part of CHIPS for America, National Institute of Standards and Technology, U.S. Department of Commerce.
+
 
 ## Code of conduct
 Please see [Code of conduct](https://github.com/usnistgov/jarvis/blob/master/CODE_OF_CONDUCT.md)
