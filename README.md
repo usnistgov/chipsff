@@ -58,6 +58,18 @@ pip install -e .
 
 **Note**: Some calculators may have additional dependencies or require specific versions of libraries. Please refer to their respective documentation for setup instructions.
 
+## Input File Parameters
+
+The input configuration file is a JSON file that specifies all required settings for performing materials analyses. Below is a detailed explanation of each parameter and its expected values.
+
+### Primary Parameters
+
+- **`jid`** *(string)*: The JARVIS ID of the material to analyze (e.g., `"JVASP-1002"`). This identifier is used to fetch structural data from the JARVIS database.
+
+- **`jid_list`** *(list of strings)*: A list of multiple JARVIS IDs for batch analysis (e.g., `["JVASP-1002", "JVASP-816", "JVASP-867"]`). Only used if analyzing multiple materials.
+
+- **`film_id`** and **`substrate_id`** *(list of strings)*: Lists of JARVIS IDs for film and substrate materials, respectively, in an interface analysis (e.g., `["JVASP-1002"]` and `["JVASP-816"]`).
+
 ## Usage
 The main script `run_chipsff.py` provides a command-line interface to perform various materials analyses.
 
