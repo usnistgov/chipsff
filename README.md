@@ -17,6 +17,22 @@ The `chipsff` repository provides a comprehensive framework for performing mater
 - **Support for Multiple Calculators**: Seamlessly switch between different calculators like `alignn_ff`, `chgnet`, `sevenn`, `mace`, `matgl`, etc.
 - **Automatic Error Calculation**: Direct comparison to density functional theory (DFT) calculations from JARVIS-DFT
 
+## Installation
+
+Clone the repository:
+```bash
+git clone https://github.com/usnistgov/chipsff
+```
+Set up a conda environment:
+```bash
+conda env create -f environment.yml -n chipsff
+conda activate chipsff
+```
+Install the CHIPS-FF package:
+```bash
+cd chipsff
+pip install -e .
+```
 ## Requirements
 
 The following libraries and tools are required:
@@ -30,22 +46,10 @@ The following libraries and tools are required:
 - `phonopy`
 - `phono3py`
 - `jarvis-tools`
+- `intermat`
 - `h5py`
 - `plotly`
 - `ruamel`
-
-You can install all dependencies by running:
-
-```bash
-pip install -r requirements.txt
-```
-## Installation
-Clone the repository and install:
-```bash
-git clone https://github.com/usnistgov/chipsff
-cd chipsff
-pip install -e .
-```
 ## Universal MLFFs Implemented
 
 - `alignn_ff`
@@ -56,7 +60,7 @@ pip install -e .
 - `orb`
 - `fairchem`
 
-**Note**: Some calculators may have additional dependencies or require specific versions of libraries. Please refer to their respective documentation for setup instructions.
+**Note**: Some calculators may have additional dependencies or require specific versions of libraries. Please refer to their respective documentation for setup instructions. To install intermat package, see [here](https://github.com/usnistgov/intermat).
 
 ## Input File Parameters
 
