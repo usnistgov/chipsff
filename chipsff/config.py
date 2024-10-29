@@ -93,9 +93,9 @@ class CHIPSFFConfig(BaseSettings):
         default_factory=lambda: {
             "dt": 1,
             "temp0": 3500,
-            "nsteps0": 1000,
+            "nsteps0": 10,
             "temp1": 300,
-            "nsteps1": 2000,
+            "nsteps1": 20,
             "taut": 20,
             "min_size": 10.0
         },
