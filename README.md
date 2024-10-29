@@ -132,6 +132,25 @@ An example `input.json` file:
   }
 }
 ```
+**2. Interface Analysis**
+To perform an interface analysis between a film and substrate:
+```bash
+python run_chipsff.py --input_file interface_input.json
+```
+An example `interface_input.json` file:
+```bash
+{
+  "film_id": ["JVASP-1002"],
+  "substrate_id": ["JVASP-816"],
+  "calculator_type": "alignn_ff",
+  "chemical_potentials_file": "chemical_potentials.json",
+  "film_index": "1_1_0",
+  "substrate_index": "1_1_0",
+  "properties_to_calculate": [
+    "analyze_interfaces"
+  ]
+}
+```
 ## Key Methods
 
 - `relax_structure()`: Optimizes the atomic structure using the specified calculator and relaxation settings.
