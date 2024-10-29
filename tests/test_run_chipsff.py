@@ -124,3 +124,46 @@ def test_run_phonon_analysis():
     assert phonon is not None
     assert zpe is not None
     assert isinstance(zpe, float)
+
+def test_load_chemical_potentials():
+    analyzer = MaterialsAnalyzer(
+        jid='JVASP-1002',
+        calculator_type='chgnet',
+        chemical_potentials_file='../chipsff/chemical_potentials.json'
+    )
+    chemical_potentials = analyzer.load_chemical_potentials()
+    assert isinstance(chemical_potentials, dict)
+
+
+def test_calculate_element_chemical_potential():
+    analyzer = MaterialsAnalyzer(
+        jid='JVASP-1002',
+        calculator_type='chgnet',
+        chemical_potentials_file='../chipsff/chemical_potentials.json'
+    )
+    element = 'Si'
+    element_jid = 'JVASP-1002'
+    chem_pot = analyzer.calculate_element_chemical_potential(element, element_jid)
+    assert isinstance(chem_pot, float)
+
+def test_capture_fire_output():
+    analyzer = MaterialsAnalyzer(
+        jid='JVASP-1002',
+        calculator_type='chgnet',
+        chemical_potentials_file='../chipsff/chemical_potentials.json'
+    )
+    ase_atoms = analyzer.atoms.ase_converter()
+    ase_atoms.calc = analyzer.calculator
+    fmax = 0.05
+    steps = 5  # Use small number for testing
+    final_energy, nsteps = analyzer.capture_fire_output(ase_atoms, fmax, steps)
+    assert final_energy is not None
+    assert nsteps <= steps
+
+def test_save_and_load_dict_json():
+    test_dict = {'a': 1, 'b': 2}
+    test_filename = 'test_json_file.json'
+    save_dict_to_json(test_dict, test_filename)
+    loaded_dict = load_dict_from_json(test_filename)
+    assert test_dict == loaded_dict
+    os.remove(test_filename)  # Clean up test file
