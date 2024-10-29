@@ -20,7 +20,7 @@ The `chipsff` repository provides a comprehensive framework for performing mater
 
 The following libraries and tools are required:
 
-- `python >= 3.6`
+- `python >= 3.9`
 - `numpy`
 - `matplotlib`
 - `pandas`
