@@ -1,4 +1,6 @@
-# chipsff
+![alt text](https://github.com/usnistgov/chipsff/actions/workflows/main.yml/badge.svg)
+
+# CHIPS-FF
 ![CHIPS-FF Schematic](chipsff/chipsffworkflow.png)
 ## Overview
 
