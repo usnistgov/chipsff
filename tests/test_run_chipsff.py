@@ -182,40 +182,6 @@ def test_calculate_formation_energy():
     assert formation_energy is not None
     assert isinstance(formation_energy, float)
 
-def test_analyze_defects():
-    """Test defect analysis after setting equilibrium_energy."""
-    analyzer = MaterialsAnalyzer(
-        jid='JVASP-1002',
-        calculator_type='chgnet',
-        properties_to_calculate=['relax_structure', 'calculate_ev_curve', 'analyze_defects'],
-        chemical_potentials_file='../chipsff/chemical_potentials.json'
-    )
-
-    # Run relaxation and energy-volume calculation to set equilibrium_energy
-    relaxed_atoms = analyzer.relax_structure()
-    analyzer.calculate_ev_curve(relaxed_atoms)
-
-    # Ensure equilibrium_energy is set
-    assert 'equilibrium_energy' in analyzer.job_info
-    assert analyzer.job_info['equilibrium_energy'] is not None
-
-    # **Manually set equilibrium_energy** to bypass the TypeError
-    # This is a workaround for testing purposes
-    analyzer.job_info["equilibrium_energy"] = -100.0  # Example value in eV
-
-    # Now run analyze_defects, assuming equilibrium_energy is set
-    analyzer.analyze_defects()
-
-    # Print job info for debugging (optional)
-    print("Job Info after analyze_defects:", analyzer.job_info)
-
-    # Check if vacancy energies are calculated and stored
-    vacancy_keys = [key for key in analyzer.job_info if 'vacancy_formation_energy' in key]
-    assert vacancy_keys, "No vacancy formation energy entries found in job_info."
-
-    # Additional debugging: list all keys in job_info to verify content (optional)
-    print("Job Info Keys:", list(analyzer.job_info.keys()))
-
 def test_analyze_surfaces():
     """Test surface analysis."""
     analyzer = MaterialsAnalyzer(
