@@ -38,7 +38,13 @@ You can install all dependencies by running:
 ```bash
 pip install -r requirements.txt
 ```
-
+## Installation
+Clone the repository and install:
+```bash
+git clone https://github.com/usnistgov/chipsff
+cd chipsff
+pip install -e .
+```
 ## Universal MLFFs Implemented
 
 - `alignn_ff`
