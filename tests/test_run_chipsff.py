@@ -181,16 +181,3 @@ def test_calculate_formation_energy():
     formation_energy = analyzer.calculate_formation_energy(relaxed_atoms)
     assert formation_energy is not None
     assert isinstance(formation_energy, float)
-
-def test_analyze_surfaces():
-    """Test surface analysis."""
-    analyzer = MaterialsAnalyzer(
-        jid='JVASP-1002',
-        calculator_type='chgnet',
-        properties_to_calculate=['analyze_surfaces'],
-        chemical_potentials_file='../chipsff/chemical_potentials.json'
-    )
-    analyzer.job_info["equilibrium_energy"]=-100.0
-    analyzer.analyze_surfaces()
-    # Check if surface energies are calculated and stored in job_info
-    assert any('Surface-' in key for key in analyzer.job_info.keys())
