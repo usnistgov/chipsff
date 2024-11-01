@@ -12,7 +12,8 @@
     "analyze_defects",
     "run_phonon3_analysis",
     "general_melter",
-    "calculate_rdf"
+    "calculate_rdf",
+    "calculate_forces"
   ],
 "bulk_relaxation_settings": {
   "filter_type": "ExpCellFilter",
