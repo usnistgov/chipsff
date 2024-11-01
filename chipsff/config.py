@@ -109,6 +109,7 @@ class CHIPSFFConfig(BaseSettings):
             "calculate_formation_energy",
             "calculate_elastic_tensor",
             "run_phonon_analysis",
+            "calculate_forces",
             "analyze_surfaces",
             "analyze_defects",
             "run_phonon3_analysis",
