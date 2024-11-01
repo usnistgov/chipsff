@@ -363,7 +363,21 @@ class MaterialsAnalyzer:
 
         return relaxed_atoms if converged else None
 
+    def calculate_forces(self, atoms):
+        """
+        Calculate the forces on the given atoms without performing relaxation.
+        """
+        self.log(f"Calculating forces for {self.jid}")
 
+        ase_atoms = atoms.ase_converter()
+        ase_atoms.calc = self.calculator
+
+        forces = ase_atoms.get_forces()  # This returns an array of forces
+
+        self.job_info['forces'] = forces.tolist()  # Convert to list for JSON serialization
+        self.log(f"Forces calculated: {forces}")
+
+        save_dict_to_json(self.job_info, self.get_job_info_filename())
 
     def calculate_formation_energy(self, relaxed_atoms):
         """
@@ -1658,6 +1672,9 @@ class MaterialsAnalyzer:
         err_a = err_b = err_c = err_vol = err_form = err_kv = err_c11 = err_c44 = err_surf_en = err_vac_en = np.nan
         form_en_entry = kv_entry = c11_entry = c44_entry = 0
 
+        if 'calculate_forces' in self.properties_to_calculate:
+            self.calculate_forces(self.atoms)
+            
         # Calculate E-V curve and bulk modulus if specified
         if 'calculate_ev_curve' in self.properties_to_calculate:
             _, _, _, _, bulk_modulus, _, _ = self.calculate_ev_curve(relaxed_atoms)
