@@ -1891,7 +1891,19 @@ class MaterialsAnalyzer:
         fig.write_image(fname_plot)
         fig.show()
 
-def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_file):
+def analyze_multiple_structures(
+    jid_list,
+    calculator_types,
+    chemical_potentials_file,
+    bulk_relaxation_settings=None,
+    phonon_settings=None,
+    properties_to_calculate=None,
+    use_conventional_cell=False,
+    surface_settings=None,
+    defect_settings=None,
+    phonon3_settings=None,
+    md_settings=None,
+):
     composite_error_data = {}
 
     for calculator_type in calculator_types:
@@ -1904,28 +1916,30 @@ def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_
                 jid=jid,
                 calculator_type=calculator_type,
                 chemical_potentials_file=chemical_potentials_file,
+                bulk_relaxation_settings=bulk_relaxation_settings,
+                phonon_settings=phonon_settings,
+                properties_to_calculate=properties_to_calculate,
+                use_conventional_cell=use_conventional_cell,
+                surface_settings=surface_settings,
+                defect_settings=defect_settings,
+                phonon3_settings=phonon3_settings,
+                md_settings=md_settings,
             )
             # Run analysis and get error data
             error_dat = analyzer.run_all()
             error_df = pd.DataFrame([error_dat])
             error_dfs.append(error_df)
 
-        # Concatenate all error DataFrames
         all_errors_df = pd.concat(error_dfs, ignore_index=True)
 
-        # Compute composite errors by ignoring NaN values
         composite_error = all_errors_df.mean(skipna=True).to_dict()
 
-        # Store the composite error data for this calculator type
         composite_error_data[calculator_type] = composite_error
 
-    # Once all materials and calculators have been processed, create a DataFrame
     composite_df = pd.DataFrame(composite_error_data).transpose()
 
-    # Plot the composite scorecard
     plot_composite_scorecard(composite_df)
 
-    # Save the composite dataframe
     composite_df.to_csv("composite_error_data.csv", index=True)
 
 def analyze_multiple_interfaces(film_jid_list, substrate_jid_list, calculator_types, chemical_potentials_file, film_index="1_1_0", substrate_index="1_1_0"):
