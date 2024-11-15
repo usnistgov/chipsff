@@ -1,23 +1,19 @@
-from typing import List
-from typing import Literal
-from typing import Dict
+from typing import List, Optional, Dict
 from pydantic_settings import BaseSettings
-from typing import Optional
 from pydantic import Field
-
 
 class CHIPSFFConfig(BaseSettings):
     jid: Optional[str] = None
     jid_list: Optional[List[str]] = None
-    calculator_type: str = "alignn_ff"
-    calculator_types: Optional[List[str]] = ["alignn_ff"]
+    calculator_type: Optional[str] = None  # Changed to Optional to allow multiple calculators
+    calculator_types: Optional[List[str]] = None  # Optional list for multiple calculators
     chemical_potentials_file: str = "chemical_potentials.json"
     film_id: Optional[List[str]] = None
     film_index: str = "0_0_1"
     substrate_id: Optional[List[str]] = None
     substrate_index: str = "0_0_1"
     use_conventional_cell: Optional[bool] = False
-    
+
     # Bulk relaxation settings
     bulk_relaxation_settings: Dict = Field(
         default_factory=lambda: {
@@ -80,7 +76,7 @@ class CHIPSFFConfig(BaseSettings):
         },
         description="Phonon calculation settings"
     )
-    
+
     phonon3_settings: Dict = Field(
         default_factory=lambda: {
             "dim": [2, 2, 2],
@@ -93,13 +89,32 @@ class CHIPSFFConfig(BaseSettings):
         default_factory=lambda: {
             "dt": 1,
             "temp0": 3500,
-            "nsteps0": 10,
+            "nsteps0": 1000,
             "temp1": 300,
-            "nsteps1": 20,
+            "nsteps1": 2000,
             "taut": 20,
             "min_size": 10.0
         },
         description="Settings for molecular dynamics (MD) simulation"
+    )
+
+    # Add mlearn_elements field
+    mlearn_elements: Optional[List[str]] = Field(
+        default_factory=lambda: [],
+        description="List of elements to compare forces with mlearn dataset"
+    )
+    
+    alignn_ff_db: bool = False
+    mptrj: bool = False
+    num_samples: Optional[int] = Field(
+        default=None,
+        description="Number of samples to process from the alignn_ff_db dataset or mptrj dataset"
+    )
+
+    # Calculator-specific settings
+    calculator_settings: Dict[str, Dict] = Field(
+        default_factory=dict,
+        description="Calculator-specific settings. Keys are calculator types."
     )
 
     properties_to_calculate: List[str] = Field(
@@ -107,13 +122,14 @@ class CHIPSFFConfig(BaseSettings):
             "relax_structure",
             "calculate_ev_curve",
             "calculate_formation_energy",
+            "calculate_forces",
             "calculate_elastic_tensor",
             "run_phonon_analysis",
-            "calculate_forces",
             "analyze_surfaces",
             "analyze_defects",
             "run_phonon3_analysis",
             "general_melter",
+            "compare_mlearn_forces",
             "calculate_rdf"
         ],
         description="List of properties to calculate in the analysis"
