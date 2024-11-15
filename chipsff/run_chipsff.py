@@ -11,6 +11,7 @@ from ase import Atoms as AseAtoms
 from ase.units import kJ
 from ase.constraints import ExpCellFilter
 from ase.optimize.fire import FIRE
+from ase.stress import voigt_6_to_full_3x3_stress
 import ase.units
 from jarvis.db.figshare import get_jid_data, data, get_request_data
 from jarvis.core.atoms import Atoms, ase_to_atoms
@@ -23,7 +24,10 @@ import h5py
 import shutil
 import glob
 import io
+import logging
 import contextlib
+import requests
+import zipfile
 import re
 import plotly.express as px
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -132,61 +136,86 @@ def load_dict_from_json(filename):
     with open(filename, 'r') as f:
         return json.load(f)
         
-def setup_calculator(calculator_type):
+def setup_calculator(calculator_type, calculator_settings):
+    """
+    Initializes and returns the appropriate calculator based on the calculator type and its settings.
+
+    Args:
+        calculator_type (str): The type/name of the calculator.
+        calculator_settings (dict): Settings specific to the calculator.
+
+    Returns:
+        calculator: An instance of the specified calculator.
+    """
     if calculator_type == "matgl":
+        import matgl
         from matgl.ext.ase import M3GNetCalculator
-        pot = matgl.load_model("M3GNet-MP-2021.2.8-PES")
-        return M3GNetCalculator(pot, compute_stress=True, stress_weight=0.01)
+        model_name = calculator_settings.get("model", "M3GNet-MP-2021.2.8-PES")
+        pot = matgl.load_model(model_name)
+        compute_stress = calculator_settings.get("compute_stress", True)
+        stress_weight = calculator_settings.get("stress_weight", 0.01)
+        return M3GNetCalculator(pot, compute_stress=compute_stress, stress_weight=stress_weight)
+
     elif calculator_type == "matgl-direct":
+        import matgl
         from matgl.ext.ase import M3GNetCalculator
-        pot = matgl.load_model("M3GNet-MP-2021.2.8-DIRECT-PES")
-        return M3GNetCalculator(pot, compute_stress=True, stress_weight=0.01)
+        model_name = calculator_settings.get("model", "M3GNet-MP-2021.2.8-DIRECT-PES")
+        pot = matgl.load_model(model_name)
+        compute_stress = calculator_settings.get("compute_stress", True)
+        stress_weight = calculator_settings.get("stress_weight", 0.01)
+        return M3GNetCalculator(pot, compute_stress=compute_stress, stress_weight=stress_weight)
+
     elif calculator_type == "alignn_ff":
         from alignn.ff.ff import AlignnAtomwiseCalculator, default_path
-        model_path = default_path() #can be adjusted to other ALIGNN models
+        model_path = calculator_settings.get("path", default_path())
+        stress_weight = calculator_settings.get("stress_weight", 0.1)
+        force_mult_natoms = calculator_settings.get("force_mult_natoms", False)
+        force_multiplier = calculator_settings.get("force_multiplier", 1)
+        modl_filename = calculator_settings.get("model_filename", "best_model.pt")
         return AlignnAtomwiseCalculator(
             path=model_path,
-            stress_wt=0.3,
-            force_mult_natoms=False,
-            force_multiplier=1,
-            modl_filename="best_model.pt",
+            stress_wt=stress_weight,
+            force_mult_natoms=force_mult_natoms,
+            force_multiplier=force_multiplier,
+            modl_filename=modl_filename,
         )
+
     elif calculator_type == "chgnet":
         from chgnet.model.dynamics import CHGNetCalculator
         return CHGNetCalculator()
+
     elif calculator_type == "mace":
         from mace.calculators import mace_mp
         return mace_mp()
+
     elif calculator_type == "mace-alexandria":
         from mace.calculators.mace import MACECalculator
-        model_path="/utils/models/alexandria_v2/mace/2D_universal_force_field_cpu.model" #adjust path to mace-alexandria
-        return MACECalculator(model_path,device="cpu") 
+        model_path = calculator_settings.get("model_path", "/users/dtw2/utils/models/alexandria_v2/mace/2D_universal_force_field_cpu.model")
+        device = calculator_settings.get("device", "cpu")
+        return MACECalculator(model_path, device=device)
+
     elif calculator_type == "sevennet":
         from sevenn.sevennet_calculator import SevenNetCalculator
-        checkpoint_path = "SevenNet/pretrained_potentials/SevenNet_0__11July2024/checkpoint_sevennet_0.pth" #adjust path to sevennet
-        return SevenNetCalculator(checkpoint_path, device="cpu")
+        checkpoint_path = calculator_settings.get("checkpoint_path", "/users/dtw2/SevenNet/pretrained_potentials/SevenNet_0__11July2024/checkpoint_sevennet_0.pth")
+        device = calculator_settings.get("device", "cpu")
+        return SevenNetCalculator(checkpoint_path, device=device)
+
     elif calculator_type == "orb-v2":
         from orb_models.forcefield import pretrained
         from orb_models.forcefield.calculator import ORBCalculator
         orbff = pretrained.orb_v2()
-        return ORBCalculator(orbff, device="cpu")
-    elif calculator_type == "eqV2_31M_omat":
+        device = calculator_settings.get("device", "cpu")
+        return ORBCalculator(orbff, device=device)
+
+    elif calculator_type.startswith("eqV2"):
         from fairchem.core import OCPCalculator
-        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_31M_omat.pt") #adjust path to OMat24
-    elif calculator_type == "eqV2_86M_omat":
-        from fairchem.core import OCPCalculator
-        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_86M_omat.pt") #adjust path to OMat24   
-    elif calculator_type == "eqV2_153M_omat":
-        from fairchem.core import OCPCalculator
-        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_153M_omat.pt") #adjust path to OMat24
-    elif calculator_type == "eqV2_31M_omat_mp_salex":
-        from fairchem.core import OCPCalculator
-        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_31M_omat_mp_salex.pt") #adjust path to OMat24
-    elif calculator_type == "eqV2_86M_omat_mp_salex":
-        from fairchem.core import OCPCalculator
-        return OCPCalculator(checkpoint_path="/fairchem-models/pretrained_models/eqV2_86M_omat_mp_salex.pt") #adjust path to OMat24
+        checkpoint_path = calculator_settings.get("checkpoint_path")
+        if not checkpoint_path:
+            raise ValueError(f"Checkpoint path must be provided for {calculator_type}")
+        return OCPCalculator(checkpoint_path=checkpoint_path)
+
     else:
-        raise ValueError("Unsupported calculator type")
+        raise ValueError(f"Unsupported calculator type: {calculator_type}")
 
 class MaterialsAnalyzer:
     def __init__(
@@ -206,6 +235,7 @@ class MaterialsAnalyzer:
         defect_settings=None,
         phonon3_settings=None,
         md_settings=None,
+        calculator_settings=None  # New parameter for calculator-specific settings
     ):
         self.calculator_type = calculator_type
         self.use_conventional_cell = use_conventional_cell
@@ -219,6 +249,7 @@ class MaterialsAnalyzer:
         self.substrate_index = substrate_index or "1_1_0"
         self.phonon3_settings = phonon3_settings or {'dim': [2, 2, 2], 'distance': 0.2}
         self.md_settings = md_settings or {'dt': 1, 'temp0': 3500, 'nsteps0': 1000, 'temp1': 300, 'nsteps1': 2000, 'taut': 20, 'min_size': 10.0}
+        self.calculator_settings = calculator_settings or {}
         if jid:
             self.jid = jid
             # Load atoms for the given JID
@@ -267,7 +298,7 @@ class MaterialsAnalyzer:
 
         # Set up the logger
         self.setup_logger()
-
+        
     def setup_logger(self):
         import logging
         self.logger = logging.getLogger(self.jid or f"{self.film_jid}_{self.substrate_jid}")
@@ -277,6 +308,12 @@ class MaterialsAnalyzer:
         fh.setFormatter(formatter)
         self.logger.addHandler(fh)
 
+    def setup_calculator(self):
+        calc_settings = self.calculator_settings
+        calc = setup_calculator(self.calculator_type, calc_settings)
+        self.log(f"Using calculator: {self.calculator_type} with settings: {calc_settings}")
+        return calc
+
     def log(self, message):
         """Log information to the job log file."""
         log_job_info(message, self.log_file)
@@ -284,11 +321,6 @@ class MaterialsAnalyzer:
     def get_atoms(self, jid):
         dat = get_jid_data(jid=jid, dataset="dft_3d")
         return Atoms.from_dict(dat["atoms"])
-
-    def setup_calculator(self):
-        calc = setup_calculator(self.calculator_type)
-        self.log(f"Using calculator: {self.calculator_type}")
-        return calc
 
     def load_chemical_potentials(self):
         if os.path.exists(self.chemical_potentials_file):
@@ -363,21 +395,7 @@ class MaterialsAnalyzer:
 
         return relaxed_atoms if converged else None
 
-    def calculate_forces(self, atoms):
-        """
-        Calculate the forces on the given atoms without performing relaxation.
-        """
-        self.log(f"Calculating forces for {self.jid}")
 
-        ase_atoms = atoms.ase_converter()
-        ase_atoms.calc = self.calculator
-
-        forces = ase_atoms.get_forces()  # This returns an array of forces
-
-        self.job_info['forces'] = forces.tolist()  # Convert to list for JSON serialization
-        self.log(f"Forces calculated: {forces}")
-
-        save_dict_to_json(self.job_info, self.get_job_info_filename())
 
     def calculate_formation_energy(self, relaxed_atoms):
         """
@@ -450,6 +468,27 @@ class MaterialsAnalyzer:
             self.save_chemical_potentials()
 
         return chemical_potential
+    def calculate_forces(self, atoms):
+        """
+        Calculate the forces on the given atoms without performing relaxation.
+        """
+        self.log(f"Calculating forces for {self.jid}")
+
+    # Convert atoms to ASE format and assign the calculator
+        ase_atoms = atoms.ase_converter()
+        ase_atoms.calc = self.calculator
+
+    # Calculate forces
+        forces = ase_atoms.get_forces()  # This returns an array of forces
+
+    # Log and save the forces
+        self.job_info['forces'] = forces.tolist()  # Convert to list for JSON serialization
+        self.log(f"Forces calculated: {forces}")
+
+    # Save to job info JSON
+        save_dict_to_json(self.job_info, self.get_job_info_filename())
+
+        return forces
 
     def calculate_ev_curve(self, relaxed_atoms):
         """Calculate the energy-volume (E-V) curve and log results."""
@@ -1674,7 +1713,14 @@ class MaterialsAnalyzer:
 
         if 'calculate_forces' in self.properties_to_calculate:
             self.calculate_forces(self.atoms)
-            
+
+        # Prepare final results dictionary
+        final_results = {}
+
+        # Initialize variables for error calculation
+        err_a = err_b = err_c = err_vol = err_form = err_kv = err_c11 = err_c44 = err_surf_en = err_vac_en = np.nan
+        form_en_entry = kv_entry = c11_entry = c44_entry = 0
+
         # Calculate E-V curve and bulk modulus if specified
         if 'calculate_ev_curve' in self.properties_to_calculate:
             _, _, _, _, bulk_modulus, _, _ = self.calculate_ev_curve(relaxed_atoms)
@@ -1685,6 +1731,7 @@ class MaterialsAnalyzer:
             }
             err_kv = mean_absolute_error([kv_entry], [bulk_modulus]) if bulk_modulus is not None else np.nan
 
+                
         # Formation energy
         if 'calculate_formation_energy' in self.properties_to_calculate:
             formation_energy = self.calculate_formation_energy(relaxed_atoms)
@@ -1869,19 +1916,6 @@ class MaterialsAnalyzer:
         return error_dat
 
 
-# Create a DataFrame for error data
-        df = pd.DataFrame([error_dat])
-
-# Save the DataFrame to CSV
-        unique_dir = os.path.basename(self.output_dir)
-        fname = os.path.join(self.output_dir, f"{unique_dir}_error_dat.csv")
-        df.to_csv(fname, index=False)
-
-# Plot the scorecard with errors
-        self.plot_error_scorecard(df)
-
-        return error_dat
-
     def plot_error_scorecard(self, df):
         import plotly.express as px
 
@@ -1891,19 +1925,19 @@ class MaterialsAnalyzer:
         fig.write_image(fname_plot)
         fig.show()
 
-def analyze_multiple_structures(
-    jid_list,
-    calculator_types,
-    chemical_potentials_file,
-    bulk_relaxation_settings=None,
-    phonon_settings=None,
-    properties_to_calculate=None,
-    use_conventional_cell=False,
-    surface_settings=None,
-    defect_settings=None,
-    phonon3_settings=None,
-    md_settings=None,
-):
+def analyze_multiple_structures(jid_list, calculator_types, chemical_potentials_file, **kwargs):
+    """
+    Analyzes multiple structures with multiple calculators and aggregates error metrics.
+    
+    Args:
+        jid_list (List[str]): List of JIDs to analyze.
+        calculator_types (List[str]): List of calculator types to use.
+        chemical_potentials_file (str): Path to the chemical potentials JSON file.
+        **kwargs: Additional keyword arguments for analysis settings.
+    
+    Returns:
+        None
+    """
     composite_error_data = {}
 
     for calculator_type in calculator_types:
@@ -1912,35 +1946,45 @@ def analyze_multiple_structures(
 
         for jid in jid_list:
             print(f"Analyzing {jid} with {calculator_type}...")
+            # Fetch calculator-specific settings
+            calc_settings = kwargs.get('calculator_settings', {}).get(calculator_type, {})
             analyzer = MaterialsAnalyzer(
                 jid=jid,
                 calculator_type=calculator_type,
                 chemical_potentials_file=chemical_potentials_file,
-                bulk_relaxation_settings=bulk_relaxation_settings,
-                phonon_settings=phonon_settings,
-                properties_to_calculate=properties_to_calculate,
-                use_conventional_cell=use_conventional_cell,
-                surface_settings=surface_settings,
-                defect_settings=defect_settings,
-                phonon3_settings=phonon3_settings,
-                md_settings=md_settings,
+                bulk_relaxation_settings=kwargs.get('bulk_relaxation_settings'),
+                phonon_settings=kwargs.get('phonon_settings'),
+                properties_to_calculate=kwargs.get('properties_to_calculate'),
+                use_conventional_cell=kwargs.get('use_conventional_cell', False),
+                surface_settings=kwargs.get('surface_settings'),
+                defect_settings=kwargs.get('defect_settings'),
+                phonon3_settings=kwargs.get('phonon3_settings'),
+                md_settings=kwargs.get('md_settings'),
+                calculator_settings=calc_settings  # Pass calculator-specific settings
             )
             # Run analysis and get error data
             error_dat = analyzer.run_all()
             error_df = pd.DataFrame([error_dat])
             error_dfs.append(error_df)
 
+        # Concatenate all error DataFrames
         all_errors_df = pd.concat(error_dfs, ignore_index=True)
 
+        # Compute composite errors by ignoring NaN values
         composite_error = all_errors_df.mean(skipna=True).to_dict()
 
+        # Store the composite error data for this calculator type
         composite_error_data[calculator_type] = composite_error
 
+    # Once all materials and calculators have been processed, create a DataFrame
     composite_df = pd.DataFrame(composite_error_data).transpose()
 
+    # Plot the composite scorecard
     plot_composite_scorecard(composite_df)
 
+    # Save the composite dataframe
     composite_df.to_csv("composite_error_data.csv", index=True)
+
 
 def analyze_multiple_interfaces(film_jid_list, substrate_jid_list, calculator_types, chemical_potentials_file, film_index="1_1_0", substrate_index="1_1_0"):
     for calculator_type in calculator_types:
@@ -1966,6 +2010,678 @@ def plot_composite_scorecard(df):
     fname_plot = "composite_error_scorecard.png"
     fig.write_image(fname_plot)
     fig.show()
+
+
+class MLearnForcesAnalyzer:
+    def __init__(self, calculator_type, mlearn_elements, output_dir=None, calculator_settings=None):
+        self.calculator_type = calculator_type
+        self.mlearn_elements = mlearn_elements
+        elements_str = "_".join(self.mlearn_elements)
+        self.output_dir = output_dir or f"mlearn_analysis_{elements_str}_{calculator_type}"
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.log_file = os.path.join(self.output_dir, "mlearn_analysis_log.txt")
+        self.setup_logger()
+        self.calculator = setup_calculator(self.calculator_type, calculator_settings or {})
+        self.job_info = {
+            "calculator_type": calculator_type,
+            "mlearn_elements": mlearn_elements,
+        }
+
+    def setup_logger(self):
+        import logging
+        self.logger = logging.getLogger("MLearnForcesAnalyzer")
+        self.logger.setLevel(logging.INFO)
+        fh = logging.FileHandler(self.log_file)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        fh.setFormatter(formatter)
+        self.logger.addHandler(fh)
+
+    def log(self, message):
+        self.logger.info(message)
+        print(message)
+
+    def setup_calculator(self):
+        return setup_calculator(self.calculator_type)
+
+    def run(self):
+        for element in self.mlearn_elements:
+            self.compare_mlearn_properties(element)
+
+    def compare_mlearn_properties(self, element):
+        """
+        Compare forces and stresses calculated by the FF calculator with mlearn DFT data for a given element.
+
+        Args:
+            element (str): Element symbol to filter structures (e.g., 'Si').
+        """
+        # Download the mlearn dataset if not already present
+        mlearn_zip_path = 'mlearn.json.zip'
+        if not os.path.isfile(mlearn_zip_path):
+            self.log("Downloading mlearn dataset...")
+            url = 'https://figshare.com/ndownloader/files/40357663'
+            response = requests.get(url)
+            with open(mlearn_zip_path, 'wb') as f:
+                f.write(response.content)
+            self.log("Download completed.")
+
+        # Read the JSON data from the zip file
+        with zipfile.ZipFile(mlearn_zip_path, 'r') as z:
+            with z.open('mlearn.json') as f:
+                mlearn_data = json.load(f)
+
+        # Convert mlearn data to DataFrame
+        df = pd.DataFrame(mlearn_data)
+
+        # Filter the dataset for the specified element
+        df['elements'] = df['atoms'].apply(lambda x: x['elements'])
+        df = df[df['elements'].apply(lambda x: element in x)]
+        df = df.reset_index(drop=True)
+        self.log(f"Filtered dataset to {len(df)} entries containing element '{element}'")
+
+        # Initialize lists to store results
+        force_results = []
+        stress_results = []
+
+        # Iterate over each structure
+        for idx, row in df.iterrows():
+            jid = row.get('jid', f"structure_{idx}")
+            atoms_dict = row['atoms']
+            atoms = Atoms.from_dict(atoms_dict)
+            dft_forces = np.array(row['forces'])
+            dft_stresses = np.array(row['stresses'])  # Original stresses in kBar
+
+            # Convert DFT stresses from kBar to GPa
+            dft_stresses_GPa = dft_stresses * 0.1  # kBar to GPa
+
+            # Convert DFT stresses to full 3x3 tensors
+            if dft_stresses_GPa.ndim == 1 and dft_stresses_GPa.size == 6:
+                dft_stress_tensor = voigt_6_to_full_3x3_stress(dft_stresses_GPa)
+            else:
+                self.log(f"Skipping {jid}: DFT stresses not in expected format.")
+                continue  # Skip structures with unexpected stress format
+
+            # Calculate predicted properties
+            predicted_forces, predicted_stresses = self.calculate_properties(atoms)
+
+            # Convert predicted stresses from eV/Å³ to GPa
+            if predicted_stresses is not None and predicted_stresses.size == 6:
+                predicted_stresses_GPa = predicted_stresses * 160.21766208  # eV/Å³ to GPa
+                predicted_stress_tensor = voigt_6_to_full_3x3_stress(predicted_stresses_GPa)
+            else:
+                self.log(f"Skipping {jid}: Predicted stresses not available.")
+                continue  # Skip structures where stresses are not available
+
+            # Flatten the 3x3 stress tensors to 9-component arrays for comparison
+            dft_stress_flat = dft_stress_tensor.flatten()
+            predicted_stress_flat = predicted_stress_tensor.flatten()
+
+            # Store the results
+            force_results.append({
+                'id': jid,
+                'target': ';'.join(map(str, dft_forces.flatten())),
+                'prediction': ';'.join(map(str, predicted_forces.flatten())),
+            })
+            stress_results.append({
+                'id': jid,
+                'target': ';'.join(map(str, dft_stress_flat)),
+                'prediction': ';'.join(map(str, predicted_stress_flat)),
+            })
+
+            # Optional: Progress indicator
+            if idx % 10 == 0:
+                self.log(f"Processed {idx + 1}/{len(df)} structures.")
+
+        # Ensure we have data to process
+        if not force_results or not stress_results:
+            self.log("No valid data found for forces or stresses. Exiting.")
+            return
+
+        # Save results to CSV files
+        force_df = pd.DataFrame(force_results)
+        force_csv = os.path.join(self.output_dir, f'AI-MLFF-forces-mlearn_{element}-test-multimae.csv')
+        force_df.to_csv(force_csv, index=False)
+        self.log(f"Saved force comparison data to '{force_csv}'")
+
+        stress_df = pd.DataFrame(stress_results)
+        stress_csv = os.path.join(self.output_dir, f'AI-MLFF-stresses-mlearn_{element}-test-multimae.csv')
+        stress_df.to_csv(stress_csv, index=False)
+        self.log(f"Saved stress comparison data to '{stress_csv}'")
+
+        # Zip the CSV files
+        self.zip_file(force_csv)
+        self.zip_file(stress_csv)
+
+        # Calculate error metrics
+        # Forces MAE
+        target_forces = np.concatenate(force_df['target'].apply(lambda x: np.array(x.split(';'), dtype=float)).values)
+        pred_forces = np.concatenate(force_df['prediction'].apply(lambda x: np.array(x.split(';'), dtype=float)).values)
+        forces_mae = mean_absolute_error(target_forces, pred_forces)
+        self.log(f"Forces MAE for element '{element}': {forces_mae:.6f} eV/Å")
+
+        # Stresses MAE
+        target_stresses = np.concatenate(stress_df['target'].apply(lambda x: np.array(x.split(';'), dtype=float)).values)
+        pred_stresses = np.concatenate(stress_df['prediction'].apply(lambda x: np.array(x.split(';'), dtype=float)).values)
+        stresses_mae = mean_absolute_error(target_stresses, pred_stresses)
+        self.log(f"Stresses MAE for element '{element}': {stresses_mae:.6f} GPa")
+
+        # Save MAE to job_info
+        self.job_info[f'forces_mae_{element}'] = forces_mae
+        self.job_info[f'stresses_mae_{element}'] = stresses_mae
+        self.save_job_info()
+
+        # Plot parity plots
+        forces_plot_filename = os.path.join(self.output_dir, f'forces_parity_plot_{element}.png')
+        self.plot_parity(target_forces, pred_forces, 'Forces', 'eV/Å', forces_plot_filename, element)
+
+        stresses_plot_filename = os.path.join(self.output_dir, f'stresses_parity_plot_{element}.png')
+        self.plot_parity(target_stresses, pred_stresses, 'Stresses', 'GPa', stresses_plot_filename, element)
+
+    def calculate_properties(self, atoms):
+        """
+        Calculate forces and stresses on the given atoms.
+
+        Returns:
+            Tuple of forces and stresses.
+        """
+        # Convert atoms to ASE format and assign the calculator
+        ase_atoms = atoms.ase_converter()
+        ase_atoms.calc = self.calculator
+
+        # Calculate properties
+        forces = ase_atoms.get_forces()
+        stresses = ase_atoms.get_stress()  # Voigt 6-component stress
+
+        return forces, stresses  # Return forces and stresses in Voigt notation
+
+    def plot_parity(self, target, prediction, property_name, units, filename, element):
+        """
+        Plot parity plot for a given property.
+
+        Args:
+            target (array-like): Target values.
+            prediction (array-like): Predicted values.
+            property_name (str): Name of the property (e.g., 'Forces').
+            units (str): Units of the property (e.g., 'eV/Å' or 'GPa').
+            filename (str): Filename to save the plot.
+            element (str): Element symbol.
+        """
+        plt.figure(figsize=(8, 8), dpi=300)
+        plt.scatter(target, prediction, alpha=0.5, edgecolors='k', s=20)
+        min_val = min(np.min(target), np.min(prediction))
+        max_val = max(np.max(target), np.max(prediction))
+        plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)
+        plt.xlabel(f'Target {property_name} ({units})', fontsize=14)
+        plt.ylabel(f'Predicted {property_name} ({units})', fontsize=14)
+        plt.title(f'Parity Plot for {property_name} - Element {element}', fontsize=16)
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(filename)
+        plt.close()
+        self.log(f"Saved parity plot for {property_name} as '{filename}'")
+
+    def zip_file(self, filename):
+        zip_filename = filename + '.zip'
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.write(filename, arcname=os.path.basename(filename))
+        os.remove(filename)  # Remove the original file
+        self.log(f"Zipped data to '{zip_filename}'")
+
+    def save_job_info(self):
+        job_info_filename = os.path.join(self.output_dir, f"mlearn_{self.calculator_type}_job_info.json")
+        with open(job_info_filename, 'w') as f:
+            json.dump(self.job_info, f, indent=4)
+
+
+class AlignnFFForcesAnalyzer:
+    def __init__(self, calculator_type, output_dir=None, calculator_settings=None):
+        self.calculator_type = calculator_type
+        self.output_dir = output_dir or f"alignn_ff_analysis_{calculator_type}"
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.log_file = os.path.join(self.output_dir, "alignn_ff_analysis_log.txt")
+        self.setup_logger()
+        self.calculator = setup_calculator(self.calculator_type, calculator_settings or {})
+        self.job_info = {
+            "calculator_type": calculator_type,
+        }
+        self.num_samples = num_samples
+
+    def setup_logger(self):
+        self.logger = logging.getLogger("AlignnFFForcesAnalyzer")
+        self.logger.setLevel(logging.INFO)
+        fh = logging.FileHandler(self.log_file)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        if self.logger.hasHandlers():
+            self.logger.handlers.clear()
+        fh.setFormatter(formatter)
+        self.logger.addHandler(fh)
+        self.log(f"Logging initialized. Output directory: {self.output_dir}")
+
+    def log(self, message):
+        self.logger.info(message)
+        print(message)
+
+    def setup_calculator(self):
+        self.log(f"Setting up calculator: {self.calculator_type}")
+        return setup_calculator(self.calculator_type)
+
+    def run(self):
+        self.compare_alignn_ff_properties()
+
+    def compare_alignn_ff_properties(self):
+        """
+        Compare forces and stresses calculated by the FF calculator with alignn_ff DFT data.
+        """
+        self.log("Loading alignn_ff_db dataset...")
+        # Load the alignn_ff_db dataset
+        alignn_ff_data = data('alignn_ff_db')
+        self.log(f"Total entries in alignn_ff_db: {len(alignn_ff_data)}")
+
+        # Initialize lists to store results
+        force_results = []
+        stress_results = []
+
+        # Limit the number of samples if specified
+        if self.num_samples:
+            alignn_ff_data = alignn_ff_data[:self.num_samples]
+
+        # Iterate over each entry
+        for idx, entry in enumerate(alignn_ff_data):
+            jid = entry.get('jid', f"structure_{idx}")
+            atoms_dict = entry['atoms']
+            atoms = Atoms.from_dict(atoms_dict)
+            dft_forces = np.array(entry['forces'])  # Assuming units of eV/Å
+            dft_stresses = np.array(entry['stresses'])  # Assuming units of eV/Å³
+
+            # The 'stresses' in alignn_ff_db are in 3x3 format and units of eV/Å³
+            # Convert DFT stresses from eV/Å³ to GPa for comparison
+            dft_stresses_GPa = dft_stresses * -0.1  # kbar to GPa
+
+            # Flatten the 3x3 stress tensor to a 9-component array for comparison
+            dft_stress_flat = dft_stresses_GPa.flatten()
+
+            # Calculate predicted properties
+            predicted_forces, predicted_stresses = self.calculate_properties(atoms)
+
+            # Handle predicted stresses
+            if predicted_stresses is not None:
+                # Predicted stresses are in Voigt 6-component format and units of eV/Å³
+                # Convert to full 3x3 tensor
+                predicted_stress_tensor_eVA3 = voigt_6_to_full_3x3_stress(predicted_stresses)
+                # Convert to GPa
+                predicted_stresses_GPa = predicted_stress_tensor_eVA3 * 160.21766208  # eV/Å³ to GPa
+                # Flatten the tensor
+                predicted_stress_flat = predicted_stresses_GPa.flatten()
+            else:
+                self.log(f"Skipping {jid}: Predicted stresses not available.")
+                continue  # Skip structures where stresses are not available
+
+            # Store the results
+            force_results.append({
+                'id': jid,
+                'target': ';'.join(map(str, dft_forces.flatten())),
+                'prediction': ';'.join(map(str, predicted_forces.flatten())),
+            })
+            stress_results.append({
+                'id': jid,
+                'target': ';'.join(map(str, dft_stress_flat)),
+                'prediction': ';'.join(map(str, predicted_stress_flat)),
+            })
+
+            # Optional: Progress indicator
+            if idx % 1000 == 0:
+                self.log(f"Processed {idx + 1}/{len(alignn_ff_data)} structures.")
+
+        # Ensure we have data to process
+        if not force_results or not stress_results:
+            self.log("No valid data found. Exiting.")
+            return
+
+        # Save results to CSV files
+        force_df = pd.DataFrame(force_results)
+        force_csv = os.path.join(self.output_dir, f'AI-MLFF-forces-alignn_ff-test-multimae.csv')
+        force_df.to_csv(force_csv, index=False)
+        self.log(f"Saved force comparison data to '{force_csv}'")
+
+        stress_df = pd.DataFrame(stress_results)
+        stress_csv = os.path.join(self.output_dir, f'AI-MLFF-stresses-alignn_ff-test-multimae.csv')
+        stress_df.to_csv(stress_csv, index=False)
+        self.log(f"Saved stress comparison data to '{stress_csv}'")
+
+        # Zip the CSV files
+        self.zip_file(force_csv)
+        self.zip_file(stress_csv)
+
+        # Calculate error metrics
+        # Forces MAE
+        target_forces = np.concatenate(force_df['target'].apply(lambda x: np.fromstring(x, sep=';')).values)
+        pred_forces = np.concatenate(force_df['prediction'].apply(lambda x: np.fromstring(x, sep=';')).values)
+        forces_mae = mean_absolute_error(target_forces, pred_forces)
+        self.log(f"Forces MAE: {forces_mae:.6f} eV/Å")
+
+        # Stresses MAE
+        target_stresses = np.concatenate(stress_df['target'].apply(lambda x: np.fromstring(x, sep=';')).values)
+        pred_stresses = np.concatenate(stress_df['prediction'].apply(lambda x: np.fromstring(x, sep=';')).values)
+        stresses_mae = mean_absolute_error(target_stresses, pred_stresses)
+        self.log(f"Stresses MAE: {stresses_mae:.6f} GPa")
+
+        # Save MAE to job_info
+        self.job_info['forces_mae'] = forces_mae
+        self.job_info['stresses_mae'] = stresses_mae
+        self.save_job_info()
+
+        # Plot parity plots
+        forces_plot_filename = os.path.join(self.output_dir, f'forces_parity_plot.png')
+        self.plot_parity(target_forces, pred_forces, 'Forces', 'eV/Å', forces_plot_filename)
+
+        stresses_plot_filename = os.path.join(self.output_dir, f'stresses_parity_plot.png')
+        self.plot_parity(target_stresses, pred_stresses, 'Stresses', 'GPa', stresses_plot_filename)
+
+    def calculate_properties(self, atoms):
+        """
+        Calculate forces and stresses on the given atoms.
+
+        Returns:
+            Tuple of forces and stresses.
+        """
+        # Convert atoms to ASE format and assign the calculator
+        ase_atoms = atoms.ase_converter()
+        ase_atoms.calc = self.calculator
+
+        # Calculate properties
+        forces = ase_atoms.get_forces()
+        stresses = ase_atoms.get_stress()  # Voigt 6-component stress in eV/Å³
+
+        return forces, stresses  # Return forces and stresses
+
+    def plot_parity(self, target, prediction, property_name, units, filename):
+        """
+        Plot parity plot for a given property.
+
+        Args:
+            target (array-like): Target values.
+            prediction (array-like): Predicted values.
+            property_name (str): Name of the property (e.g., 'Forces').
+            units (str): Units of the property (e.g., 'eV/Å' or 'GPa').
+            filename (str): Filename to save the plot.
+        """
+        plt.figure(figsize=(8, 8), dpi=300)
+        plt.scatter(target, prediction, alpha=0.5, edgecolors='k', s=20)
+        min_val = min(np.min(target), np.min(prediction))
+        max_val = max(np.max(target), np.max(prediction))
+        plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)
+        plt.xlabel(f'Target {property_name} ({units})', fontsize=14)
+        plt.ylabel(f'Predicted {property_name} ({units})', fontsize=14)
+        plt.title(f'Parity Plot for {property_name}', fontsize=16)
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(filename)
+        plt.close()
+        self.log(f"Saved parity plot for {property_name} as '{filename}'")
+
+    def zip_file(self, filename):
+        zip_filename = filename + '.zip'
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.write(filename, arcname=os.path.basename(filename))
+        os.remove(filename)  # Remove the original file
+        self.log(f"Zipped data to '{zip_filename}'")
+
+    def save_job_info(self):
+        job_info_filename = os.path.join(self.output_dir, f"alignn_ff_{self.calculator_type}_job_info.json")
+        with open(job_info_filename, 'w') as f:
+            json.dump(self.job_info, f, indent=4)
+
+import os
+import json
+import logging
+import zipfile
+import numpy as np
+import pandas as pd
+from sklearn.metrics import mean_absolute_error
+import matplotlib.pyplot as plt
+from ase.units import kJ
+# Ensure that the necessary modules and functions are imported
+# from your existing codebase, such as `data`, `Atoms`, `voigt_6_to_full_3x3_stress`, etc.
+# Example:
+# from your_module import data, Atoms, voigt_6_to_full_3x3_stress, loadjson
+
+
+class MPTrjAnalyzer:
+    def __init__(self, calculator_type, output_dir=None, calculator_settings=None, num_samples=None):
+        self.calculator_type = calculator_type
+        self.output_dir = output_dir or f"mptrj_analysis_{calculator_type}"
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.log_file = os.path.join(self.output_dir, "mptrj_analysis_log.txt")
+        self.setup_logger()
+        self.calculator = setup_calculator(self.calculator_type, calculator_settings or {})
+        self.job_info = {
+            "calculator_type": calculator_type,
+        }
+        self.num_samples = num_samples
+
+
+    def setup_logger(self):
+        self.logger = logging.getLogger("MPTrjAnalyzer")
+        self.logger.setLevel(logging.INFO)
+        fh = logging.FileHandler(self.log_file)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        if self.logger.hasHandlers():
+            self.logger.handlers.clear()
+        fh.setFormatter(formatter)
+        self.logger.addHandler(fh)
+        self.log(f"Logging initialized. Output directory: {self.output_dir}")
+
+    def log(self, message):
+        self.logger.info(message)
+        print(message)
+
+    def setup_calculator(self):
+        self.log(f"Setting up calculator: {self.calculator_type}")
+        return setup_calculator(self.calculator_type)
+
+    def run(self):
+        self.compare_mptrj_properties()
+
+    def compare_mptrj_properties(self):
+        """
+        Compare forces and stresses calculated by the FF calculator with MP trajectory data.
+        """
+        self.log("Loading MP trajectory dataset...")
+        try:
+            # Load the MP trajectory dataset
+            mptrj_data = data('m3gnet_mpf')
+            self.log(f"Total entries in mptrj: {len(mptrj_data)}")
+        except Exception as e:
+            self.log(f"Failed to load MP trajectory dataset: {e}")
+            return
+
+        # Initialize lists to store results
+        force_results = []
+        stress_results = []
+
+        # Limit the number of samples if specified
+        if self.num_samples:
+            mptrj_data = mptrj_data[:self.num_samples]
+            self.log(f"Limiting analysis to first {self.num_samples} samples.")
+
+        # Iterate over each entry with try/except to handle errors gracefully
+        for idx, entry in enumerate(mptrj_data):
+            jid = entry.get('jid', f"structure_{idx}")
+            try:
+                atoms_dict = entry['atoms']
+                atoms = Atoms.from_dict(atoms_dict)
+                dft_forces = np.array(entry['force'])  
+                dft_stresses = np.array(entry['stress'])  
+
+                # Convert DFT stresses from eV/Å³ to GPa for comparison
+                # Note: Ensure that the conversion factor is correct based on your data
+                dft_stresses_GPa = dft_stresses * -0.1  # Example conversion
+
+                # Flatten the 3x3 stress tensor to a 9-component array for comparison
+                dft_stress_flat = dft_stresses_GPa.flatten()
+
+                # Calculate predicted properties
+                predicted_forces, predicted_stresses = self.calculate_properties(atoms)
+
+                # Handle predicted stresses
+                if predicted_stresses is not None:
+                    # Predicted stresses are in Voigt 6-component format and units of eV/Å³
+                    # Convert to full 3x3 tensor
+                    predicted_stress_tensor_eVA3 = voigt_6_to_full_3x3_stress(predicted_stresses)
+                    # Convert to GPa
+                    predicted_stresses_GPa = predicted_stress_tensor_eVA3 * 160.21766208  # eV/Å³ to GPa
+                    # Flatten the tensor
+                    predicted_stress_flat = predicted_stresses_GPa.flatten()
+                else:
+                    self.log(f"Skipping {jid}: Predicted stresses not available.")
+                    continue  # Skip structures where stresses are not available
+
+                # Store the results
+                force_results.append({
+                    'id': jid,
+                    'target': ';'.join(map(str, dft_forces.flatten())),
+                    'prediction': ';'.join(map(str, predicted_forces.flatten())),
+                })
+                stress_results.append({
+                    'id': jid,
+                    'target': ';'.join(map(str, dft_stress_flat)),
+                    'prediction': ';'.join(map(str, predicted_stress_flat)),
+                })
+
+                # Optional: Progress indicator
+                if (idx + 1) % 1000 == 0:
+                    self.log(f"Processed {idx + 1}/{len(mptrj_data)} structures.")
+
+            except Exception as e:
+                self.log(f"Error processing {jid} at index {idx}: {e}")
+                continue  # Continue with the next entry
+
+        # Ensure we have data to process
+        if not force_results or not stress_results:
+            self.log("No valid data found for forces or stresses. Exiting.")
+            return
+
+        # Save results to CSV files
+        try:
+            force_df = pd.DataFrame(force_results)
+            force_csv = os.path.join(self.output_dir, f'AI-MLFF-forces-mptrj-test-multimae.csv')
+            force_df.to_csv(force_csv, index=False)
+            self.log(f"Saved force comparison data to '{force_csv}'")
+        except Exception as e:
+            self.log(f"Failed to save force comparison data: {e}")
+
+        try:
+            stress_df = pd.DataFrame(stress_results)
+            stress_csv = os.path.join(self.output_dir, f'AI-MLFF-stresses-mptrj-test-multimae.csv')
+            stress_df.to_csv(stress_csv, index=False)
+            self.log(f"Saved stress comparison data to '{stress_csv}'")
+        except Exception as e:
+            self.log(f"Failed to save stress comparison data: {e}")
+
+        # Zip the CSV files
+        self.zip_file(force_csv)
+        self.zip_file(stress_csv)
+
+        # Calculate error metrics
+        try:
+            # Forces MAE
+            target_forces = np.concatenate(force_df['target'].apply(lambda x: np.fromstring(x, sep=';')).values)
+            pred_forces = np.concatenate(force_df['prediction'].apply(lambda x: np.fromstring(x, sep=';')).values)
+            forces_mae = mean_absolute_error(target_forces, pred_forces)
+            self.log(f"Forces MAE: {forces_mae:.6f} eV/Å")
+
+            # Stresses MAE
+            target_stresses = np.concatenate(stress_df['target'].apply(lambda x: np.fromstring(x, sep=';')).values)
+            pred_stresses = np.concatenate(stress_df['prediction'].apply(lambda x: np.fromstring(x, sep=';')).values)
+            stresses_mae = mean_absolute_error(target_stresses, pred_stresses)
+            self.log(f"Stresses MAE: {stresses_mae:.6f} GPa")
+
+            # Save MAE to job_info
+            self.job_info['forces_mae'] = forces_mae
+            self.job_info['stresses_mae'] = stresses_mae
+            self.save_job_info()
+
+            # Plot parity plots
+            forces_plot_filename = os.path.join(self.output_dir, f'forces_parity_plot.png')
+            self.plot_parity(target_forces, pred_forces, 'Forces', 'eV/Å', forces_plot_filename)
+
+            stresses_plot_filename = os.path.join(self.output_dir, f'stresses_parity_plot.png')
+            self.plot_parity(target_stresses, pred_stresses, 'Stresses', 'GPa', stresses_plot_filename)
+
+        except Exception as e:
+            self.log(f"Error calculating error metrics: {e}")
+
+    def calculate_properties(self, atoms):
+        """
+        Calculate forces and stresses on the given atoms.
+
+        Returns:
+            Tuple of forces and stresses.
+        """
+        try:
+            # Convert atoms to ASE format and assign the calculator
+            ase_atoms = atoms.ase_converter()
+            ase_atoms.calc = self.calculator
+
+            # Calculate properties
+            forces = ase_atoms.get_forces()
+            stresses = ase_atoms.get_stress()  # Voigt 6-component stress in eV/Å³
+
+            return forces, stresses  # Return forces and stresses
+        except Exception as e:
+            self.log(f"Error calculating properties: {e}")
+            return None, None
+
+    def plot_parity(self, target, prediction, property_name, units, filename):
+        """
+        Plot parity plot for a given property.
+
+        Args:
+            target (array-like): Target values.
+            prediction (array-like): Predicted values.
+            property_name (str): Name of the property (e.g., 'Forces').
+            units (str): Units of the property (e.g., 'eV/Å' or 'GPa').
+            filename (str): Filename to save the plot.
+        """
+        try:
+            plt.figure(figsize=(8, 8), dpi=300)
+            plt.scatter(target, prediction, alpha=0.5, edgecolors='k', s=20)
+            min_val = min(np.min(target), np.min(prediction))
+            max_val = max(np.max(target), np.max(prediction))
+            plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)
+            plt.xlabel(f'Target {property_name} ({units})', fontsize=14)
+            plt.ylabel(f'Predicted {property_name} ({units})', fontsize=14)
+            plt.title(f'Parity Plot for {property_name}', fontsize=16)
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(filename)
+            plt.close()
+            self.log(f"Saved parity plot for {property_name} as '{filename}'")
+        except Exception as e:
+            self.log(f"Error plotting parity for {property_name}: {e}")
+
+    def zip_file(self, filename):
+        try:
+            if os.path.exists(filename):
+                zip_filename = filename + '.zip'
+                with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(filename, arcname=os.path.basename(filename))
+                os.remove(filename)  # Remove the original file
+                self.log(f"Zipped data to '{zip_filename}'")
+            else:
+                self.log(f"File '{filename}' does not exist. Skipping zipping.")
+        except Exception as e:
+            self.log(f"Error zipping file '{filename}': {e}")
+
+    def save_job_info(self):
+        try:
+            job_info_filename = os.path.join(self.output_dir, f"mptrj_{self.calculator_type}_job_info.json")
+            with open(job_info_filename, 'w') as f:
+                json.dump(self.job_info, f, indent=4)
+            self.log(f"Job info saved to '{job_info_filename}'")
+        except Exception as e:
+            self.log(f"Error saving job info: {e}")
+
+            
 #jid_list=['JVASP-1002']
 jid_list_all = [ 'JVASP-1002', 'JVASP-816', 'JVASP-867', 'JVASP-1029', 'JVASP-861','JVASP-30', 'JVASP-8169', 'JVASP-890', 'JVASP-8158','JVASP-8118',
     'JVASP-107', 'JVASP-39', 'JVASP-7844', 'JVASP-35106', 'JVASP-1174',
@@ -1992,50 +2708,28 @@ if __name__ == "__main__":
     input_file_data = CHIPSFFConfig(**input_file)
     pprint.pprint(input_file_data.dict())
 
-    # If film_id is provided, treat it as a list
-    film_jids = input_file_data.film_id if input_file_data.film_id else []
+    # Determine the list of JIDs
+    if input_file_data.jid:
+        jid_list = [input_file_data.jid]
+    elif input_file_data.jid_list:
+        jid_list = input_file_data.jid_list
+    else:
+        jid_list = []
 
-    # If substrate_id is provided, treat it as a list
+    # Determine the list of calculators
+    if input_file_data.calculator_type:
+        calculator_list = [input_file_data.calculator_type]
+    elif input_file_data.calculator_types:
+        calculator_list = input_file_data.calculator_types
+    else:
+        calculator_list = []
+
+    # Handle film and substrate IDs for interface analysis
+    film_jids = input_file_data.film_id if input_file_data.film_id else []
     substrate_jids = input_file_data.substrate_id if input_file_data.substrate_id else []
 
-    # Case 1: Interface calculations with film_jid and substrate_jid
-    if film_jids and substrate_jids:
-        # Loop through all film and substrate JIDs and perform interface analysis
-        for film_jid, substrate_jid in zip(film_jids, substrate_jids):
-            print(f"Analyzing interface between {film_jid} and {substrate_jid} with {input_file_data.calculator_type}...")
-            analyzer = MaterialsAnalyzer(
-                calculator_type=input_file_data.calculator_type,
-                chemical_potentials_file=input_file_data.chemical_potentials_file,
-                film_jid=film_jid,
-                substrate_jid=substrate_jid,
-                film_index=input_file_data.film_index,
-                substrate_index=input_file_data.substrate_index,
-                bulk_relaxation_settings=input_file_data.bulk_relaxation_settings,
-                phonon_settings=input_file_data.phonon_settings,
-                properties_to_calculate=input_file_data.properties_to_calculate,
-            )
-            analyzer.analyze_interfaces()
-
-    # Case 2: Single JID provided
-    elif input_file_data.jid and input_file_data.calculator_type:
-        print(f"Analyzing {input_file_data.jid} with {input_file_data.calculator_type}...")
-        analyzer = MaterialsAnalyzer(
-            jid=input_file_data.jid,
-            calculator_type=input_file_data.calculator_type,
-            chemical_potentials_file=input_file_data.chemical_potentials_file,
-            bulk_relaxation_settings=input_file_data.bulk_relaxation_settings,
-            phonon_settings=input_file_data.phonon_settings,
-            properties_to_calculate=input_file_data.properties_to_calculate,
-            use_conventional_cell=input_file_data.use_conventional_cell,
-            surface_settings=input_file_data.surface_settings,
-            defect_settings=input_file_data.defect_settings,
-            phonon3_settings=input_file_data.phonon3_settings,
-            md_settings=input_file_data.md_settings,
-        )
-        analyzer.run_all()
-
-    # Case 3: Multiple JIDs and calculator types provided (batch processing)
-    elif input_file_data.jid_list and input_file_data.calculator_types:
+    # Scenario 5: Batch Processing for Multiple JIDs and Calculators
+    if input_file_data.jid_list and input_file_data.calculator_types:
         analyze_multiple_structures(
             jid_list=input_file_data.jid_list,
             calculator_types=input_file_data.calculator_types,
@@ -2048,7 +2742,83 @@ if __name__ == "__main__":
             defect_settings=input_file_data.defect_settings,
             phonon3_settings=input_file_data.phonon3_settings,
             md_settings=input_file_data.md_settings,
+            calculator_settings=input_file_data.calculator_settings  # Pass calculator-specific settings
         )
-
     else:
-        print("Please provide valid arguments in the configuration file.")
+        # Scenario 1 & 3: Single or Multiple JIDs with Single or Multiple Calculators
+        if jid_list and calculator_list:
+            for jid in jid_list:
+                for calculator_type in calculator_list:
+                    print(f"Analyzing {jid} with {calculator_type}...")
+                    # Fetch calculator-specific settings
+                    calc_settings = input_file_data.calculator_settings.get(calculator_type, {})
+                    analyzer = MaterialsAnalyzer(
+                        jid=jid,
+                        calculator_type=calculator_type,
+                        chemical_potentials_file=input_file_data.chemical_potentials_file,
+                        bulk_relaxation_settings=input_file_data.bulk_relaxation_settings,
+                        phonon_settings=input_file_data.phonon_settings,
+                        properties_to_calculate=input_file_data.properties_to_calculate,
+                        use_conventional_cell=input_file_data.use_conventional_cell,
+                        surface_settings=input_file_data.surface_settings,
+                        defect_settings=input_file_data.defect_settings,
+                        phonon3_settings=input_file_data.phonon3_settings,
+                        md_settings=input_file_data.md_settings,
+                        calculator_settings=calc_settings  # Pass calculator-specific settings
+                    )
+                    analyzer.run_all()
+
+    # Proceed with other scenarios that don't overlap with jid_list and calculator_types
+    # Scenario 2 & 4: Interface Calculations (Multiple Calculators and/or JIDs)
+    if film_jids and substrate_jids and calculator_list:
+        for film_jid, substrate_jid in zip(film_jids, substrate_jids):
+            for calculator_type in calculator_list:
+                print(f"Analyzing interface between {film_jid} and {substrate_jid} with {calculator_type}...")
+                # Fetch calculator-specific settings
+                calc_settings = input_file_data.calculator_settings.get(calculator_type, {})
+                analyzer = MaterialsAnalyzer(
+                    calculator_type=calculator_type,
+                    chemical_potentials_file=input_file_data.chemical_potentials_file,
+                    film_jid=film_jid,
+                    substrate_jid=substrate_jid,
+                    film_index=input_file_data.film_index,
+                    substrate_index=input_file_data.substrate_index,
+                    bulk_relaxation_settings=input_file_data.bulk_relaxation_settings,
+                    phonon_settings=input_file_data.phonon_settings,
+                    properties_to_calculate=input_file_data.properties_to_calculate,
+                    calculator_settings=calc_settings  # Pass calculator-specific settings
+                )
+                analyzer.analyze_interfaces()
+
+    # Continue with other independent scenarios
+    # Scenario 6: MLearn Forces Comparison
+    if input_file_data.mlearn_elements and input_file_data.calculator_type:
+        print(f"Running mlearn forces comparison for elements {input_file_data.mlearn_elements} with {input_file_data.calculator_type}...")
+        mlearn_analyzer = MLearnForcesAnalyzer(
+            calculator_type=input_file_data.calculator_type,
+            mlearn_elements=input_file_data.mlearn_elements,
+            calculator_settings=input_file_data.calculator_settings.get(input_file_data.calculator_type, {})
+        )
+        mlearn_analyzer.run()
+
+    # Scenario 7: AlignnFF Forces Comparison
+    if input_file_data.alignn_ff_db and input_file_data.calculator_type:
+        print(f"Running AlignnFF forces comparison with {input_file_data.calculator_type}...")
+        alignn_ff_analyzer = AlignnFFForcesAnalyzer(
+            calculator_type=input_file_data.calculator_type,
+            num_samples=input_file_data.num_samples,
+            calculator_settings=input_file_data.calculator_settings.get(input_file_data.calculator_type, {})
+        )
+        alignn_ff_analyzer.run()
+
+    # Scenario 8: MPTrj Forces Comparison
+    if input_file_data.mptrj and input_file_data.calculator_type:
+        print(f"Running MPTrj forces comparison with {input_file_data.calculator_type}...")
+        mptrj_analyzer = MPTrjAnalyzer(
+            calculator_type=input_file_data.calculator_type,
+            num_samples=input_file_data.num_samples,
+            calculator_settings=input_file_data.calculator_settings.get(input_file_data.calculator_type, {})
+        )
+        mptrj_analyzer.run()
+
+
