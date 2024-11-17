@@ -134,3 +134,23 @@ class CHIPSFFConfig(BaseSettings):
         ],
         description="List of properties to calculate in the analysis"
     )
+    
+    scaling_test: Optional[bool] = Field(
+        default=False,
+        description="Whether to perform the scaling test"
+    )
+    scaling_numbers: Optional[List[int]] = Field(
+        default_factory=lambda: [1, 2, 3, 4, 5],
+        description="List of scaling factors for supercell sizes"
+    )
+    scaling_element: Optional[str] = Field(
+        default='Cu',
+        description="Element symbol to use for the scaling test"
+    )
+    scaling_calculators: Optional[List[str]] = Field(
+        default_factory=lambda: [],
+        description="List of calculator types to test in the scaling analysis"
+    )
+
+
+
