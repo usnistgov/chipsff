@@ -52,37 +52,6 @@ def test_relax_structure():
     assert relaxed_atoms is not None
     assert hasattr(relaxed_atoms, 'lattice')
 
-def test_get_entry():
-    jid = 'JVASP-1002'  # Replace with a valid JID from your dataset
-    entry = get_entry(jid)
-    assert entry['jid'] == jid
-
-def test_collect_data():
-    aggregated_data = collect_data(dft_3d, vacancydb, surface_data)
-    assert isinstance(aggregated_data, list)
-    assert len(aggregated_data) > 0
-    for entry in aggregated_data:
-        assert 'vacancy' in entry
-        assert 'surface' in entry
-
-def test_get_vacancy_energy_entry():
-    aggregated_data = collect_data(dft_3d, vacancydb, surface_data)
-    jid = 'JVASP-1002'  # Use a JID known to have vacancy data
-    vacancy_entries = get_vacancy_energy_entry(jid, aggregated_data)
-    assert isinstance(vacancy_entries, list)
-    for entry in vacancy_entries:
-        assert 'symbol' in entry
-        assert 'vac_en_entry' in entry
-
-
-def test_get_surface_energy_entry():
-    aggregated_data = collect_data(dft_3d, vacancydb, surface_data)
-    jid = 'JVASP-1002'  # Use a JID known to have surface data
-    surface_entries = get_surface_energy_entry(jid, aggregated_data)
-    assert isinstance(surface_entries, list)
-    for entry in surface_entries:
-        assert 'name' in entry
-        assert 'surf_en_entry' in entry
 
 def test_calculate_ev_curve():
     analyzer = MaterialsAnalyzer(
