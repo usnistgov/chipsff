@@ -37,7 +37,118 @@ from jarvis.db.jsonutils import loadjson
 from chipsff.config import CHIPSFFConfig
 from tqdm import tqdm
 
+dft_3d = data("dft_3d")
+vacancydb = data("vacancydb")
+# surf_url = "https://figshare.com/ndownloader/files/46355689"
+surface_data = data("surfacedb")
+# get_request_data(js_tag="surface_db_dd.json", url=surf_url)
 
+
+def get_entry(jid):
+    for entry in dft_3d:
+        if entry["jid"] == jid:
+            return entry
+    raise ValueError(f"JID {jid} not found in the database")
+
+
+def collect_data(dft_3d, vacancydb, surface_data):
+    defect_ids = list(set([entry["jid"] for entry in vacancydb]))
+    surf_ids = list(
+        set(
+            [
+                entry["name"].split("Surface-")[1].split("_miller_")[0]
+                for entry in surface_data
+            ]
+        )
+    )
+
+    aggregated_data = []
+    for entry in dft_3d:
+        tmp = entry
+        tmp["vacancy"] = {}
+        tmp["surface"] = {}
+
+        # Check if the entry is in the defect dataset
+        if entry["jid"] in defect_ids:
+            for vac_entry in vacancydb:
+                if entry["jid"] == vac_entry["jid"]:
+                    tmp["vacancy"].setdefault(
+                        vac_entry["id"].split("_")[0]
+                        + "_"
+                        + vac_entry["id"].split("_")[1],
+                        vac_entry["ef"],
+                    )
+
+        # Check if the entry is in the surface dataset
+        if entry["jid"] in surf_ids:
+            for surf_entry in surface_data:
+                jid = (
+                    surf_entry["name"]
+                    .split("Surface-")[1]
+                    .split("_miller_")[0]
+                )
+                if entry["jid"] == jid:
+                    tmp["surface"].setdefault(
+                        "_".join(
+                            surf_entry["name"]
+                            .split("_thickness")[0]
+                            .split("_")[0:5]
+                        ),
+                        surf_entry["surf_en"],
+                    )
+
+        aggregated_data.append(tmp)
+
+    return aggregated_data
+
+
+def get_vacancy_energy_entry(jid, aggregated_data):
+    """
+    Retrieve the vacancy formation energy entry (vac_en_entry) for a given jid.
+
+    Parameters:
+    jid (str): The JID of the material.
+    aggregated_data (list): The aggregated data containing vacancy and surface information.
+
+    Returns:
+    dict: A dictionary containing the vacancy formation energy entry and corresponding symbol.
+    """
+    for entry in aggregated_data:
+        if entry["jid"] == jid:
+            vacancy_data = entry.get("vacancy", {})
+            if vacancy_data:
+                return [
+                    {"symbol": key, "vac_en_entry": value}
+                    for key, value in vacancy_data.items()
+                ]
+            else:
+                return f"No vacancy data found for JID {jid}"
+    return f"JID {jid} not found in the data."
+
+
+def get_surface_energy_entry(jid, aggregated_data):
+    """
+    Retrieve the surface energy entry (surf_en_entry) for a given jid.
+
+    Parameters:
+    jid (str): The JID of the material.
+    aggregated_data (list): The aggregated data containing vacancy and surface information.
+
+    Returns:
+    list: A list of dictionaries containing the surface energy entry and corresponding name.
+    """
+    for entry in aggregated_data:
+        if entry["jid"] == jid:
+            surface_data = entry.get("surface", {})
+            if surface_data:
+                # Prepend 'Surface-JVASP-<jid>_' to the key for correct matching
+                return [
+                    {"name": f"{key}", "surf_en_entry": value}
+                    for key, value in surface_data.items()
+                ]
+            else:
+                return f"No surface data found for JID {jid}"
+    return f"JID {jid} not found in the data."
 
 def log_job_info(message, log_file):
     """Log job information to a file and print it."""
