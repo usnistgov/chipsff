@@ -79,7 +79,6 @@ dependencies:
   - importlib_resources=6.4.0=pyhd8ed1ab_0
   - inflect=7.3.1=pyhd8ed1ab_0
   - itsdangerous=2.2.0=pyhd8ed1ab_0
-  - jarvis-tools=2024.5.10=pyhd8ed1ab_0
   - jinja2=3.1.4=pyhd8ed1ab_0
   - joblib=1.4.2=pyhd8ed1ab_0
   - keras=3.4.1=pyhd8ed1ab_2
@@ -286,6 +285,7 @@ dependencies:
       - gitdb==4.0.11
       - gitpython==3.1.43
       - iniconfig==2.0.0
+      - jarvis-tools==2024.10.10
       - kaleido==0.2.1
       - looseversion==1.3.0
       - mace-torch==0.3.6
