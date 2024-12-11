@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="chipsff",
-    version="2024.10.20",
+    version="2024.11.30",
     author="Daniel Wines, Kamal Choudhary",
     author_email="daniel.wines@nist.gov",
     description="CHIPSFF: A force field analysis toolkit",
