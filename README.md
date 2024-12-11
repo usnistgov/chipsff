@@ -35,6 +35,20 @@ Install the CHIPS-FF package:
 cd chipsff
 pip install -e .
 ```
+
+## Examples
+
+| Notebooks                                                                                                                                      | Google&nbsp;Colab                                                                                                                                        | Descriptions                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Structure optimization](https://colab.research.google.com/github/knc6/jarvis-tools-notebooks/blob/master/jarvis-tools-notebooks/chipsff_optimization.ipynb)                                                       | [![Open in Google Colab]](https://colab.research.google.com/github/knc6/jarvis-tools-notebooks/blob/master/jarvis-tools-notebooks/chipsff_optimization.ipynb)                                 | Examples for comparing errors in lattice parameter predictions, bulk modulus, elastic constants, etc.                                                                                                                                                                                                                                                                       |
+| [Scaling/timing comparison](https://colab.research.google.com/github/knc6/jarvis-tools-notebooks/blob/master/jarvis-tools-notebooks/chipsff_scaling.ipynb)                                                  | [![Open in Google Colab]](https://colab.research.google.com/github/knc6/jarvis-tools-notebooks/blob/master/jarvis-tools-notebooks/chipsff_scaling.ipynb)                            | Examples of analyzing scaling and timing comparisons.                                                                                                                                                                                                                                                                                                                                 |
+
+
+                                                                                                                                                    
+
+[Open in Google Colab]: https://colab.research.google.com/assets/colab-badge.svg
+
+
 ## Requirements
 
 The following libraries and tools are required:
