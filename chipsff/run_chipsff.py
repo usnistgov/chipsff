@@ -208,20 +208,7 @@ def setup_calculator(calculator_type, calculator_settings):
     elif calculator_type == "alignn_ff":
         from alignn.ff.ff import AlignnAtomwiseCalculator, default_path
 
-        model_path = calculator_settings.get("path", default_path())
-        stress_weight = calculator_settings.get("stress_weight", 0.01)
-        force_mult_natoms = calculator_settings.get("force_mult_natoms", True)
-        force_multiplier = calculator_settings.get("force_multiplier", 1)
-        modl_filename = calculator_settings.get(
-            "model_filename", "best_model.pt"
-        )
-        return AlignnAtomwiseCalculator(
-            path=model_path,
-            stress_wt=stress_weight,
-            force_mult_natoms=force_mult_natoms,
-            force_multiplier=force_multiplier,
-            modl_filename=modl_filename,
-        )
+        return AlignnAtomwiseCalculator()
 
     elif calculator_type == "chgnet":
         from chgnet.model.dynamics import CHGNetCalculator
