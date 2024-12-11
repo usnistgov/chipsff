@@ -134,7 +134,7 @@ def plot_composite_scorecard(df):
 # from your_module import data, Atoms, voigt_6_to_full_3x3_stress, loadjson
 
 
-if __name__ == "__main__":
+def main():
     import pprint
 
     parser = argparse.ArgumentParser(description="Run Materials Analyzer")
@@ -292,3 +292,7 @@ if __name__ == "__main__":
                 ),
             )
             mptrj_analyzer.run()
+
+
+if __name__ == "__main__":
+    main()

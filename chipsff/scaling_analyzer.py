@@ -12,9 +12,10 @@ class ScalingAnalyzer:
         self.config = config
         self.scaling_numbers = config.scaling_numbers or [1, 2, 3, 4, 5]
         self.scaling_element = config.scaling_element or "Cu"
-        self.scaling_calculators = config.scaling_calculators or [
-            config.calculator_type
-        ]
+        self.scaling_calculators = (
+            config.scaling_calculators or config.calculator_types
+        )
+
         self.calculator_settings = config.calculator_settings or {}
         elements_str = self.scaling_element
         self.output_dir = f"scaling_analysis_{elements_str}"
