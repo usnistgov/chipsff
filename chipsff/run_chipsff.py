@@ -107,7 +107,7 @@ def analyze_multiple_interfaces(
                 analyzer.analyze_interfaces()
 
 
-def plot_composite_scorecard(self, df):
+def plot_composite_scorecard(df):
 
     fig = px.imshow(
         df, text_auto=True, aspect="auto", labels=dict(color="Error")
@@ -123,8 +123,6 @@ def plot_composite_scorecard(self, df):
 
     # Optionally adjust the text font size for cells
     fig.update_traces(textfont=dict(size=18))  # Adjust text size in cells
-
-    unique_dir = os.path.basename(self.output_dir)
     fname_plot = "composite_error_scorecard.png"
     fig.write_image(fname_plot)
     fig.show()
