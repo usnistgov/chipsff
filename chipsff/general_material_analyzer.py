@@ -192,16 +192,12 @@ class MaterialsAnalyzer:
         with open(self.chemical_potentials_file, "w") as f:
             json.dump(self.chemical_potentials, f, indent=4)
 
-    def capture_fire_output(self, ase_atoms, fmax, steps, verbose=True):
+    def capture_fire_output(self, ase_atoms, fmax, steps):
         """Capture the output of the FIRE optimizer."""
         log_stream = io.StringIO()
-        if verbose:
+        with contextlib.redirect_stdout(log_stream):
             dyn = FIRE(ase_atoms)
             dyn.run(fmax=fmax, steps=steps)
-        else:
-            with contextlib.redirect_stdout(log_stream):
-                dyn = FIRE(ase_atoms)
-                dyn.run(fmax=fmax, steps=steps)
         output = log_stream.getvalue().strip()
 
         final_energy = None
