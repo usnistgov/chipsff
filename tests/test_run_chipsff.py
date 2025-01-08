@@ -172,7 +172,7 @@ def test_capture_fire_output():
     fmax = 0.05
     steps = 5  # Use small number for testing
     final_energy, nsteps = analyzer.capture_fire_output(
-        ase_atoms, fmax, steps, verbose=False
+        ase_atoms, fmax, steps
     )
     assert final_energy is not None
     assert nsteps <= steps
