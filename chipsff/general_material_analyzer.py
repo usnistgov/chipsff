@@ -379,16 +379,22 @@ class MaterialsAnalyzer:
         return forces
 
     def calculate_ev_curve(self, relaxed_atoms):
-        """Calculate the energy-volume (E-V) curve and log results."""
+        """Calculate the energy-volume (E-V) curve and log results, with fallback if fitting fails."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from ase.eos import EquationOfState
+        from ase.units import kJ
+
         self.log(f"Calculating EV curve for {self.jid}")
 
-        dx = np.arange(-0.06, 0.06, 0.01)  # Strain values
-        y = []  # Energies
-        vol = []  # Volumes
-        strained_structures = []  # To store strained structures
+        # Strain values
+        dx = np.arange(-0.06, 0.06, 0.01)
+        y = []   # Energies
+        vol = [] # Volumes
+        strained_structures = []
 
         for i in dx:
-            # Apply strain and calculate energy at each strain value
+            # Apply strain and calculate energy
             strained_atoms = relaxed_atoms.strain_atoms(i)
             strained_structures.append(strained_atoms)
             ase_atoms = strained_atoms.ase_converter()
@@ -398,55 +404,73 @@ class MaterialsAnalyzer:
             y.append(energy)
             vol.append(strained_atoms.volume)
 
-        # Convert data to numpy arrays for processing
+        # Convert to numpy arrays
         y = np.array(y)
         vol = np.array(vol)
 
-        # Fit the E-V curve using an equation of state (EOS)
+        # We'll store kv, e0, and v0 for returning
+        kv = None
+        e0 = None
+        v0 = None
+
+        # Attempt EoS fitting
         try:
             eos = EquationOfState(vol, y, eos="murnaghan")
             v0, e0, B = eos.fit()
 
-            # Bulk modulus in GPa (conversion factor from ASE units)
-            kv = B / kJ * 1.0e24  # Convert to GPa
+            # Convert B to GPa
+            kv = B / kJ * 1.0e24
 
-            # Log important results
+            # Log results
             self.log(f"Bulk modulus: {kv} GPa")
-            self.log(f"Equilibrium energy: {e0} eV")
+            self.log(f"Equilibrium energy (fitted): {e0} eV")
             self.log(f"Equilibrium volume: {v0} Å³")
 
-            # Save E-V curve plot
+            # Plotting
             fig = plt.figure()
             eos.plot()
-            ev_plot_filename = os.path.join(
-                self.output_dir, "E_vs_V_curve.png"
-            )
+            ev_plot_filename = os.path.join(self.output_dir, "E_vs_V_curve.png")
             fig.savefig(ev_plot_filename)
             plt.close(fig)
             self.log(f"E-V curve plot saved to {ev_plot_filename}")
 
-            # Save E-V curve data to a text file
+            # Save E-V data
             ev_data_filename = os.path.join(self.output_dir, "E_vs_V_data.txt")
             with open(ev_data_filename, "w") as f:
                 f.write("Volume (Å³)\tEnergy (eV)\n")
-                for v, e in zip(vol, y):
-                    f.write(f"{v}\t{e}\n")
+                for vol_i, en_i in zip(vol, y):
+                    f.write(f"{vol_i}\t{en_i}\n")
             self.log(f"E-V curve data saved to {ev_data_filename}")
 
-            # Update job info with the results
+            # Update job info with fitted equilibrium values
             self.job_info["bulk_modulus"] = kv
             self.job_info["equilibrium_energy"] = e0
             self.job_info["equilibrium_volume"] = v0
             save_dict_to_json(self.job_info, self.get_job_info_filename())
 
         except RuntimeError as e:
+            # Log the error but don't abort the workflow
             self.log(f"Error fitting EOS for {self.jid}: {e}")
             self.log("Skipping bulk modulus calculation due to fitting error.")
-            kv = None  # Set bulk modulus to None or handle this as you wish
-            e0, v0 = None, None  # Set equilibrium energy and volume to None
 
-        # Return additional values for thermal expansion analysis
-        return vol, y, strained_structures, eos, kv, e0, v0
+            # As a fallback, set equilibrium_energy to the final relaxed bulk energy
+            # so subsequent steps can proceed.
+            fallback_energy = self.job_info.get("final_energy_structure", None)
+            if fallback_energy is not None:
+                self.log(
+                    f"Using fallback equilibrium_energy = {fallback_energy} eV "
+                    f"(final bulk-relaxed energy) for subsequent calculations."
+                )
+                self.job_info["equilibrium_energy"] = fallback_energy
+                save_dict_to_json(self.job_info, self.get_job_info_filename())
+            else:
+                self.log(
+                    "No fallback energy found in job_info['final_energy_structure']; "
+                    "equilibrium_energy remains None."
+                )
+
+        # Return data needed by other parts (thermal expansion, etc.)
+        return vol, y, strained_structures, None, kv, e0, v0
 
     def calculate_elastic_tensor(self, relaxed_atoms):
         import elastic
