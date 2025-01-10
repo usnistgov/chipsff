@@ -1750,6 +1750,51 @@ class MaterialsAnalyzer:
             zpe = None
 
         # -----------------------------------------------
+        # Vacancy energy analysis
+        # -----------------------------------------------
+        if "analyze_defects" in self.properties_to_calculate:
+                from chipsff.utils import collect_data, get_vacancy_energy_entry
+                from sklearn.metrics import mean_absolute_error
+                import numpy as np
+
+                # Perform the single-pass defect generation & relaxation
+                self.analyze_defects()
+
+                # Retrieve all vacancies from the job info
+                all_vac_data = self.job_info.get("all_vacancies", [])
+
+                # Gather references from your external DB
+                vacancy_entries = get_vacancy_energy_entry(self.jid, collect_data())
+
+                # Match each vacancy to a reference
+                for vac in all_vac_data:
+                        defect_name = vac["name"]  # e.g. "JVASP-113_Zr"
+                        matching_entry = next(
+                                (entry for entry in vacancy_entries if entry["symbol"] == defect_name),
+                                None
+                        )
+                        if matching_entry:
+                                vac["vac_en_entry"] = matching_entry.get("vac_en_entry", 0.0)
+                        else:
+                                self.log(f"No valid matching entry found for {defect_name}")
+
+                # Re-save updated vacancy info to job_info.json (so user sees the matched references here as well)
+                self.job_info["all_vacancies"] = all_vac_data
+                save_dict_to_json(self.job_info, self.get_job_info_filename())
+
+                # Only keep matched entries (vac_en_entry != 0.0) for final_results
+                matched_vacs = [v for v in all_vac_data if v["vac_en_entry"] != 0.0]
+                final_results["vacancy_energy"] = matched_vacs
+
+                # Optionally compute an error metric using matched vacancies
+                vac_en = [v["vac_en"] for v in matched_vacs]
+                vac_ref = [v["vac_en_entry"] for v in matched_vacs]
+                if vac_en and vac_ref:
+                        err_vac_en = mean_absolute_error(vac_ref, vac_en)
+                else:
+                        err_vac_en = np.nan
+
+        # -----------------------------------------------
         # Surface energy analysis
         # -----------------------------------------------
         if "analyze_surfaces" in self.properties_to_calculate:
@@ -1758,82 +1803,30 @@ class MaterialsAnalyzer:
                 from sklearn.metrics import mean_absolute_error
 
                 self.analyze_surfaces()
-                surf_en, surf_en_entry = [], []
-                surface_entries = get_surface_energy_entry(self.jid, collect_data())
 
-                indices_list = self.surface_settings.get(
-                    "indices_list",
-                    [
-                        [1, 0, 0],
-                        [1, 1, 1],
-                        [1, 1, 0],
-                        [0, 1, 1],
-                        [0, 0, 1],
-                        [0, 1, 0],
-                    ],
-                )
-
-                for indices in indices_list:
-                        surface_name = f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}"
-                        calculated_surface_energy = self.job_info.get(surface_name, 0)
-                        try:
-                                matching_entry = next(
-                                    (
-                                        entry
-                                        for entry in surface_entries
-                                        if entry["name"].strip() == surface_name.strip()
-                                    ),
-                                    None,
-                                )
-                                if (
-                                    matching_entry
-                                    and calculated_surface_energy != 0
-                                    and matching_entry["surf_en_entry"] != 0
-                                ):
-                                    surf_en.append(calculated_surface_energy)
-                                    surf_en_entry.append(matching_entry["surf_en_entry"])
-                                else:
-                                    print(f"No valid matching entry found for {surface_name}")
-                        except Exception as e:
-                                print(f"Error processing surface {surface_name}: {e}")
-                                self.log(f"Error processing surface {surface_name}: {str(e)}")
-                                continue
-
-                final_results["surface_energy"] = [
-                    {
-                        "name": f"Surface-{self.jid}_miller_{'_'.join(map(str, indices))}",
-                        "surf_en": se,
-                        "surf_en_entry": see,
-                    }
-                    for se, see, indices in zip(surf_en, surf_en_entry, indices_list)
-                ]
-                err_surf_en = (
-                    mean_absolute_error(surf_en_entry, surf_en) if surf_en else np.nan
-                )
-
-        # -----------------------------------------------
-        # Vacancy energy analysis
-        # -----------------------------------------------
-        if "analyze_surfaces" in self.properties_to_calculate:
-                from chipsff.utils import collect_data, get_surface_energy_entry
-                import numpy as np
-                from sklearn.metrics import mean_absolute_error
-
-                self.analyze_surfaces()
-
-                # Now retrieve the actual surfaces that were analyzed
+                # Retrieve the surfaces that were actually relaxed
                 all_surfs = self.job_info.get("all_surfaces", [])
                 surface_entries = get_surface_energy_entry(self.jid, collect_data())
 
+                # Ensure surface_entries is a list of dictionaries
+                if isinstance(surface_entries, dict):
+                        surface_entries = [surface_entries]
+                if not isinstance(surface_entries, list):
+                        self.log("surface_entries is not a list; skipping surface matching.")
+                        surface_entries = []
+
                 matched_surfs = []
                 for surf_info in all_surfs:
-                        sname = surf_info["surface_name"]  # e.g. "Surface-JVASP-1327_miller_1_1_0"
+                        sname = surf_info["surface_name"]
                         calc_en = surf_info["surf_en"]
 
-                        # Attempt to find a reference entry
+                        # Attempt to find a dict with matching "name"
                         matching_entry = next(
-                            (entry for entry in surface_entries if entry["name"] == sname),
-                            None
+                                (
+                                    entry for entry in surface_entries
+                                    if isinstance(entry, dict) and entry.get("name") == sname
+                                ),
+                                None
                         )
                         if matching_entry and matching_entry.get("surf_en_entry", 0) != 0:
                                 matched_surfs.append({
@@ -1846,7 +1839,6 @@ class MaterialsAnalyzer:
 
                 final_results["surface_energy"] = matched_surfs
 
-                # Optionally compute error metric
                 if matched_surfs:
                         se_calc = [m["surf_en"] for m in matched_surfs]
                         se_ref = [m["surf_en_entry"] for m in matched_surfs]
@@ -1961,4 +1953,3 @@ class MaterialsAnalyzer:
         )
         fig.write_image(fname_plot)
         fig.show()
-
