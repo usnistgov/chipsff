@@ -493,293 +493,269 @@ class MaterialsAnalyzer:
         from phonopy.phonon.band_structure import BandStructure
         from phonopy.structure.atoms import Atoms as PhonopyAtoms
 
-        """Perform Phonon calculation, generate force constants, and plot band structure & DOS."""
+        """
+        Perform Phonon calculation, generate force constants, and plot band structure & DOS.
+        If phonon analysis fails, log the error and return (None, None) so workflow continues.
+        """
         self.log(f"Starting phonon analysis for {self.jid}")
-        phonopy_bands_figname = f"ph_{self.jid}_{self.calculator_type}.png"
 
         # Phonon generation parameters
+        phonopy_bands_figname = f"ph_{self.jid}_{self.calculator_type}.png"
         dim = self.phonon_settings.get("dim", [2, 2, 2])
-        # Define the conversion factor from THz to cm^-1
         THz_to_cm = 33.35641  # 1 THz = 33.35641 cm^-1
-
         force_constants_filename = "FORCE_CONSTANTS"
         eigenvalues_filename = "phonon_eigenvalues.txt"
         thermal_props_filename = "thermal_properties.txt"
         write_fc = True
-        min_freq_tol_cm = -5.0  # in cm^-1
+        min_freq_tol_cm = -5.0
         distance = self.phonon_settings.get("distance", 0.2)
 
-        # Generate k-point path
-        kpoints = Kpoints().kpath(relaxed_atoms, line_density=5)
+        try:
+            # --- Begin Phonon Steps ---
+            from jarvis.core.kpoints import Kpoints3D as Kpoints
+            kpoints = Kpoints().kpath(relaxed_atoms, line_density=5)
 
-        # Convert atoms to Phonopy-compatible object
-        self.log("Converting atoms to Phonopy-compatible format...")
-        bulk = relaxed_atoms.phonopy_converter()
-        phonon = Phonopy(
-            bulk,
-            [[dim[0], 0, 0], [0, dim[1], 0], [0, 0, dim[2]]],
-            # Do not set factor here to keep frequencies in THz during calculations
-        )
+            self.log("Converting atoms to Phonopy-compatible format...")
+            bulk = relaxed_atoms.phonopy_converter()
+            from phonopy import Phonopy
 
-        # Generate displacements
-        phonon.generate_displacements(distance=distance)
-        supercells = phonon.supercells_with_displacements
-        self.log(f"Generated {len(supercells)} supercells for displacements.")
-
-        # Calculate forces for each supercell
-        set_of_forces = []
-        for idx, scell in enumerate(supercells):
-            self.log(f"Calculating forces for supercell {idx+1}...")
-            ase_atoms = AseAtoms(
-                symbols=scell.symbols,
-                positions=scell.positions,
-                cell=scell.cell,
-                pbc=True,
+            phonon = Phonopy(
+                bulk,
+                [[dim[0], 0, 0], [0, dim[1], 0], [0, 0, dim[2]]],
+                # Frequencies remain in THz for internal calculations
             )
-            ase_atoms.calc = self.calculator
-            forces = np.array(ase_atoms.get_forces())
 
-            # Correct for drift force
-            drift_force = forces.sum(axis=0)
-            for force in forces:
-                force -= drift_force / forces.shape[0]
+            # Displacement generation
+            phonon.generate_displacements(distance=distance)
+            supercells = phonon.supercells_with_displacements
+            self.log(f"Generated {len(supercells)} supercells for displacements.")
 
-            set_of_forces.append(forces)
-
-        # Generate force constants
-        self.log("Producing force constants...")
-        phonon.produce_force_constants(forces=set_of_forces)
-
-        # Write force constants to file if required
-        if write_fc:
-            force_constants_filepath = os.path.join(
-                self.output_dir, force_constants_filename
-            )
-            self.log(
-                f"Writing force constants to {force_constants_filepath}..."
-            )
-            write_FORCE_CONSTANTS(
-                phonon.force_constants, filename=force_constants_filepath
-            )
-            self.log(f"Force constants saved to {force_constants_filepath}")
-
-        # Prepare bands for band structure calculation
-        bands = [kpoints.kpts]  # Assuming kpoints.kpts is a list of q-points
-
-        # Prepare labels and path_connections
-        labels = []
-        path_connections = []
-        for i, label in enumerate(kpoints.labels):
-            if label:
-                labels.append(label)
-            else:
-                labels.append("")  # Empty string for points without labels
-
-        # Since we have a single path, set path_connections accordingly
-        path_connections = [True] * (len(bands) - 1)
-        path_connections.append(False)
-
-        # Run band structure calculation with labels
-        self.log("Running band structure calculation...")
-        phonon.run_band_structure(
-            bands,
-            with_eigenvectors=False,
-            labels=labels,
-            path_connections=path_connections,
-        )
-
-        # Write band.yaml file (frequencies will be in THz)
-        band_yaml_filepath = os.path.join(self.output_dir, "band.yaml")
-        self.log(f"Writing band structure data to {band_yaml_filepath}...")
-        phonon.band_structure.write_yaml(filename=band_yaml_filepath)
-        self.log(f"band.yaml saved to {band_yaml_filepath}")
-
-        # --- Begin post-processing to convert frequencies to cm^-1 while preserving formatting ---
-        from ruamel.yaml import YAML
-
-        self.log(
-            f"Converting frequencies in {band_yaml_filepath} to cm^-1 while preserving formatting..."
-        )
-        yaml = YAML()
-        yaml.preserve_quotes = True
-
-        with open(band_yaml_filepath, "r") as f:
-            band_data = yaml.load(f)
-
-        for phonon_point in band_data["phonon"]:
-            for band in phonon_point["band"]:
-                freq = band["frequency"]
-                if freq is not None:
-                    band["frequency"] = freq * THz_to_cm
-
-        with open(band_yaml_filepath, "w") as f:
-            yaml.dump(band_data, f)
-
-        self.log(
-            f"Frequencies in {band_yaml_filepath} converted to cm^-1 with formatting preserved"
-        )
-        # --- End post-processing ---
-
-        # Phonon band structure and eigenvalues
-        lbls = kpoints.labels
-        lbls_ticks = []
-        freqs = []
-        lbls_x = []
-        count = 0
-        eigenvalues = []
-
-        for ii, k in enumerate(kpoints.kpts):
-            k_str = ",".join(map(str, k))
-            if ii == 0 or k_str != ",".join(map(str, kpoints.kpts[ii - 1])):
-                freqs_at_k = phonon.get_frequencies(k)  # Frequencies in THz
-                freqs_at_k_cm = freqs_at_k * THz_to_cm  # Convert to cm^-1
-                freqs.append(freqs_at_k_cm)
-                eigenvalues.append(
-                    (k, freqs_at_k_cm)
-                )  # Store frequencies in cm^-1
-                lbl = "$" + str(lbls[ii]) + "$" if lbls[ii] else ""
-                if lbl:
-                    lbls_ticks.append(lbl)
-                    lbls_x.append(count)
-                count += 1
-
-        # Write eigenvalues to file with frequencies in cm^-1
-        eigenvalues_filepath = os.path.join(
-            self.output_dir, eigenvalues_filename
-        )
-        self.log(f"Writing phonon eigenvalues to {eigenvalues_filepath}...")
-        with open(eigenvalues_filepath, "w") as eig_file:
-            eig_file.write("k-points\tFrequencies (cm^-1)\n")
-            for k, freqs_at_k_cm in eigenvalues:
-                k_str = ",".join(map(str, k))
-                freqs_str = "\t".join(map(str, freqs_at_k_cm))
-                eig_file.write(f"{k_str}\t{freqs_str}\n")
-        self.log(f"Phonon eigenvalues saved to {eigenvalues_filepath}")
-
-        # Convert frequencies to numpy array in cm^-1
-        freqs = np.array(freqs)
-
-        # Plot phonon band structure and DOS
-        the_grid = plt.GridSpec(1, 2, width_ratios=[3, 1], wspace=0.0)
-        plt.rcParams.update({"font.size": 18})
-        plt.figure(figsize=(10, 5))
-
-        # Plot phonon bands
-        plt.subplot(the_grid[0])
-        for i in range(freqs.shape[1]):
-            plt.plot(freqs[:, i], lw=2, c="b")
-        for i in lbls_x:
-            plt.axvline(x=i, c="black")
-        plt.xticks(lbls_x, lbls_ticks)
-        plt.ylabel("Frequency (cm$^{-1}$)")
-        plt.xlim([0, max(lbls_x)])
-
-        # Run mesh and DOS calculations
-        phonon.run_mesh(
-            [40, 40, 40], is_gamma_center=True, is_mesh_symmetry=False
-        )
-        phonon.run_total_dos()
-        tdos = phonon.total_dos
-        freqs_dos = (
-            np.array(tdos.frequency_points) * THz_to_cm
-        )  # Convert to cm^-1
-        dos_values = tdos.dos
-        min_freq = min_freq_tol_cm  # in cm^-1
-        max_freq = max(freqs_dos)
-
-        plt.ylim([min_freq, max_freq])
-
-        # Plot DOS
-        plt.subplot(the_grid[1])
-        plt.fill_between(
-            dos_values,
-            freqs_dos,
-            color=(0.2, 0.4, 0.6, 0.6),
-            edgecolor="k",
-            lw=1,
-            y2=0,
-        )
-        plt.xlabel("DOS")
-        plt.yticks([])
-        plt.xticks([])
-        plt.ylim([min_freq, max_freq])
-        plt.xlim([0, max(dos_values)])
-
-        # Save the plot
-        os.makedirs(self.output_dir, exist_ok=True)
-        plot_filepath = os.path.join(self.output_dir, phonopy_bands_figname)
-        plt.tight_layout()
-        plt.savefig(plot_filepath)
-        self.log(
-            f"Phonon band structure and DOS combined plot saved to {plot_filepath}"
-        )
-        plt.close()
-
-        self.log("Calculating thermal properties...")
-        phonon.run_mesh(mesh=[20, 20, 20])
-        phonon.run_thermal_properties(t_step=10, t_max=1000, t_min=0)
-        tprop_dict = phonon.get_thermal_properties_dict()
-
-        # Plot thermal properties
-        plt.figure()
-        plt.plot(
-            tprop_dict["temperatures"],
-            tprop_dict["free_energy"],
-            label="Free energy (kJ/mol)",
-            color="red",
-        )
-        plt.plot(
-            tprop_dict["temperatures"],
-            tprop_dict["entropy"],
-            label="Entropy (J/K*mol)",
-            color="blue",
-        )
-        plt.plot(
-            tprop_dict["temperatures"],
-            tprop_dict["heat_capacity"],
-            label="Heat capacity (J/K*mol)",
-            color="green",
-        )
-        plt.legend()
-        plt.xlabel("Temperature (K)")
-        plt.ylabel("Thermal Properties")
-        plt.title("Thermal Properties")
-
-        thermal_props_plot_filepath = os.path.join(
-            self.output_dir, f"Thermal_Properties_{self.jid}.png"
-        )
-        plt.savefig(thermal_props_plot_filepath)
-        self.log(
-            f"Thermal properties plot saved to {thermal_props_plot_filepath}"
-        )
-        plt.close()
-
-        # Save thermal properties to file
-        thermal_props_filepath = os.path.join(
-            self.output_dir, thermal_props_filename
-        )
-        with open(thermal_props_filepath, "w") as f:
-            f.write(
-                "Temperature (K)\tFree Energy (kJ/mol)\tEntropy (J/K*mol)\tHeat Capacity (J/K*mol)\n"
-            )
-            for i in range(len(tprop_dict["temperatures"])):
-                f.write(
-                    f"{tprop_dict['temperatures'][i]}\t{tprop_dict['free_energy'][i]}\t"
-                    f"{tprop_dict['entropy'][i]}\t{tprop_dict['heat_capacity'][i]}\n"
+            # Calculate forces for each displaced supercell
+            set_of_forces = []
+            for idx, scell in enumerate(supercells):
+                self.log(f"Calculating forces for supercell {idx+1}...")
+                ase_atoms = AseAtoms(
+                    symbols=scell.symbols,
+                    positions=scell.positions,
+                    cell=scell.cell,
+                    pbc=True,
                 )
-        self.log(f"Thermal properties written to {thermal_props_filepath}")
+                ase_atoms.calc = self.calculator
+                forces = np.array(ase_atoms.get_forces())
 
-        # Calculate zero-point energy (ZPE)
-        zpe = (
-            tprop_dict["free_energy"][0] * 0.0103643
-        )  # Converting from kJ/mol to eV
-        self.log(f"Zero-point energy: {zpe} eV")
+                # Correct for drift
+                drift_force = forces.sum(axis=0)
+                for force in forces:
+                    force -= drift_force / forces.shape[0]
 
-        # Save to job info
-        self.job_info["phonopy_bands"] = phonopy_bands_figname
-        save_dict_to_json(self.job_info, self.get_job_info_filename())
+                set_of_forces.append(forces)
 
-        return phonon, zpe
+            self.log("Producing force constants...")
+            phonon.produce_force_constants(forces=set_of_forces)
+
+            # Write force constants if requested
+            if write_fc:
+                force_constants_filepath = os.path.join(
+                    self.output_dir, force_constants_filename
+                )
+                self.log(f"Writing force constants to {force_constants_filepath}...")
+                write_FORCE_CONSTANTS(phonon.force_constants, filename=force_constants_filepath)
+                self.log(f"Force constants saved to {force_constants_filepath}")
+
+            # Prepare band structure
+            bands = [kpoints.kpts]  # Assuming a single path
+            labels = []
+            from ruamel.yaml import YAML
+            path_connections = []
+            for i, label in enumerate(kpoints.labels):
+                labels.append(label if label else "")
+
+            path_connections = [True] * (len(bands) - 1)
+            path_connections.append(False)
+
+            # Run band structure
+            self.log("Running band structure calculation...")
+            phonon.run_band_structure(
+                bands, with_eigenvectors=False, labels=labels, path_connections=path_connections
+            )
+
+            # Save band.yaml
+            band_yaml_filepath = os.path.join(self.output_dir, "band.yaml")
+            self.log(f"Writing band structure data to {band_yaml_filepath}...")
+            phonon.band_structure.write_yaml(filename=band_yaml_filepath)
+            self.log(f"band.yaml saved to {band_yaml_filepath}")
+
+            # Post-process frequencies to cm^-1
+            self.log(
+                f"Converting frequencies in {band_yaml_filepath} to cm^-1 while preserving formatting..."
+            )
+            yaml = YAML()
+            yaml.preserve_quotes = True
+
+            with open(band_yaml_filepath, "r") as f:
+                band_data = yaml.load(f)
+
+            for phonon_point in band_data["phonon"]:
+                for band in phonon_point["band"]:
+                    freq = band["frequency"]
+                    if freq is not None:
+                        band["frequency"] = freq * THz_to_cm
+
+            with open(band_yaml_filepath, "w") as f:
+                yaml.dump(band_data, f)
+            self.log(
+                f"Frequencies in {band_yaml_filepath} converted to cm^-1 with formatting preserved"
+            )
+
+            # Collect band structure frequencies
+            lbls = kpoints.labels
+            lbls_ticks = []
+            freqs = []
+            lbls_x = []
+            count = 0
+            eigenvalues = []
+
+            for ii, k in enumerate(kpoints.kpts):
+                k_str = ",".join(map(str, k))
+                if ii == 0 or k_str != ",".join(map(str, kpoints.kpts[ii - 1])):
+                    freqs_at_k = phonon.get_frequencies(k)  # Frequencies in THz
+                    freqs_at_k_cm = freqs_at_k * THz_to_cm  # Convert to cm^-1
+                    freqs.append(freqs_at_k_cm)
+                    eigenvalues.append((k, freqs_at_k_cm))
+                    lbl = "$" + str(lbls[ii]) + "$" if lbls[ii] else ""
+                    if lbl:
+                        lbls_ticks.append(lbl)
+                        lbls_x.append(count)
+                    count += 1
+
+            # Write eigenvalues to file
+            eigenvalues_filepath = os.path.join(self.output_dir, eigenvalues_filename)
+            self.log(f"Writing phonon eigenvalues to {eigenvalues_filepath}...")
+            with open(eigenvalues_filepath, "w") as eig_file:
+                eig_file.write("k-points\tFrequencies (cm^-1)\n")
+                for k, freqs_at_k_cm in eigenvalues:
+                    k_str = ",".join(map(str, k))
+                    freqs_str = "\t".join(map(str, freqs_at_k_cm))
+                    eig_file.write(f"{k_str}\t{freqs_str}\n")
+            self.log(f"Phonon eigenvalues saved to {eigenvalues_filepath}")
+
+            # Convert frequencies to np array
+            freqs = np.array(freqs)
+
+            # Plot band structure and DOS
+            the_grid = plt.GridSpec(1, 2, width_ratios=[3, 1], wspace=0.0)
+            plt.rcParams.update({"font.size": 18})
+            plt.figure(figsize=(10, 5))
+
+            plt.subplot(the_grid[0])
+            for i in range(freqs.shape[1]):
+                plt.plot(freqs[:, i], lw=2, c="b")
+            for i in lbls_x:
+                plt.axvline(x=i, c="black")
+            plt.xticks(lbls_x, lbls_ticks)
+            plt.ylabel("Frequency (cm$^{-1}$)")
+            plt.xlim([0, max(lbls_x)])
+
+            phonon.run_mesh([40, 40, 40], is_gamma_center=True, is_mesh_symmetry=False)
+            phonon.run_total_dos()
+            tdos = phonon.total_dos
+            freqs_dos = np.array(tdos.frequency_points) * THz_to_cm
+            dos_values = tdos.dos
+            min_freq = min_freq_tol_cm
+            max_freq = max(freqs_dos)
+            plt.ylim([min_freq, max_freq])
+
+            plt.subplot(the_grid[1])
+            plt.fill_between(
+                dos_values,
+                freqs_dos,
+                color=(0.2, 0.4, 0.6, 0.6),
+                edgecolor="k",
+                lw=1,
+                y2=0,
+            )
+            plt.xlabel("DOS")
+            plt.yticks([])
+            plt.xticks([])
+            plt.ylim([min_freq, max_freq])
+            plt.xlim([0, max(dos_values)])
+            os.makedirs(self.output_dir, exist_ok=True)
+
+            plot_filepath = os.path.join(self.output_dir, phonopy_bands_figname)
+            plt.tight_layout()
+            plt.savefig(plot_filepath)
+            self.log(f"Phonon band structure and DOS combined plot saved to {plot_filepath}")
+            plt.close()
+
+            self.log("Calculating thermal properties...")
+            phonon.run_mesh(mesh=[20, 20, 20])
+            phonon.run_thermal_properties(t_step=10, t_max=1000, t_min=0)
+            tprop_dict = phonon.get_thermal_properties_dict()
+
+            # Plot thermal properties
+            plt.figure()
+            plt.plot(
+                tprop_dict["temperatures"],
+                tprop_dict["free_energy"],
+                label="Free energy (kJ/mol)",
+                color="red",
+            )
+            plt.plot(
+                tprop_dict["temperatures"],
+                tprop_dict["entropy"],
+                label="Entropy (J/K*mol)",
+                color="blue",
+            )
+            plt.plot(
+                tprop_dict["temperatures"],
+                tprop_dict["heat_capacity"],
+                label="Heat capacity (J/K*mol)",
+                color="green",
+            )
+            plt.legend()
+            plt.xlabel("Temperature (K)")
+            plt.ylabel("Thermal Properties")
+            plt.title("Thermal Properties")
+
+            thermal_props_plot_filepath = os.path.join(
+                self.output_dir, f"Thermal_Properties_{self.jid}.png"
+            )
+            plt.savefig(thermal_props_plot_filepath)
+            self.log(f"Thermal properties plot saved to {thermal_props_plot_filepath}")
+            plt.close()
+
+            # Save thermal properties to file
+            thermal_props_filepath = os.path.join(self.output_dir, thermal_props_filename)
+            with open(thermal_props_filepath, "w") as f:
+                f.write(
+                    "Temperature (K)\tFree Energy (kJ/mol)\tEntropy (J/K*mol)\tHeat Capacity (J/K*mol)\n"
+                )
+                for i in range(len(tprop_dict["temperatures"])):
+                    f.write(
+                        f"{tprop_dict['temperatures'][i]}\t{tprop_dict['free_energy'][i]}\t"
+                        f"{tprop_dict['entropy'][i]}\t{tprop_dict['heat_capacity'][i]}\n"
+                    )
+            self.log(f"Thermal properties written to {thermal_props_filepath}")
+
+            # Compute zero-point energy (ZPE)
+            zpe = tprop_dict["free_energy"][0] * 0.0103643  # kJ/mol -> eV
+            self.log(f"Zero-point energy: {zpe} eV")
+
+            # Save to job info
+            self.job_info["phonopy_bands"] = phonopy_bands_figname
+            save_dict_to_json(self.job_info, self.get_job_info_filename())
+
+            return phonon, zpe
+
+        except Exception as e:
+            # Catch any phonopy-related error and allow workflow to continue
+            err_msg = (
+                f"Phonon analysis failed for {self.jid} with error: {str(e)}. "
+                "Skipping phonon steps but continuing the workflow."
+            )
+            self.log(err_msg)
+            print(err_msg)
+            return None, None
 
     def analyze_defects(self):
         """Analyze defects by generating, relaxing, and calculating vacancy formation energy."""
@@ -1754,42 +1730,55 @@ class MaterialsAnalyzer:
         # -----------------------------------------------
         if "analyze_defects" in self.properties_to_calculate:
                 from chipsff.utils import collect_data, get_vacancy_energy_entry
-                from sklearn.metrics import mean_absolute_error
                 import numpy as np
+                from sklearn.metrics import mean_absolute_error
 
-                # Perform the single-pass defect generation & relaxation
+                # 1) Actually run the single-pass defect analysis
                 self.analyze_defects()
 
-                # Retrieve all vacancies from the job info
+                # 2) Retrieve the defect data from job_info
                 all_vac_data = self.job_info.get("all_vacancies", [])
 
-                # Gather references from your external DB
+                # 3) Get reference data; ensure it's a list of dict
                 vacancy_entries = get_vacancy_energy_entry(self.jid, collect_data())
+                if isinstance(vacancy_entries, dict):
+                        # Wrap single dict in a list
+                        vacancy_entries = [vacancy_entries]
+                if not isinstance(vacancy_entries, list):
+                        self.log("No valid or unexpected vacancy reference data type.")
+                        vacancy_entries = []
 
-                # Match each vacancy to a reference
-                for vac in all_vac_data:
-                        defect_name = vac["name"]  # e.g. "JVASP-113_Zr"
+                # 4) Attempt to match each vacancy in all_vac_data to the reference
+                matched_vac = []
+                for vac_info in all_vac_data:
+                        defect_name = vac_info["name"]   # e.g. "JVASP-107_Si"
+                        calc_vac_en = vac_info["vac_en"]
+
+                        # Find an entry dict with "symbol" == defect_name
                         matching_entry = next(
-                                (entry for entry in vacancy_entries if entry["symbol"] == defect_name),
+                                (
+                                    entry for entry in vacancy_entries
+                                    if isinstance(entry, dict) and entry.get("symbol") == defect_name
+                                ),
                                 None
                         )
-                        if matching_entry:
-                                vac["vac_en_entry"] = matching_entry.get("vac_en_entry", 0.0)
+
+                        if matching_entry and matching_entry.get("vac_en_entry", 0) != 0:
+                                matched_vac.append({
+                                    "name": defect_name,
+                                    "vac_en": calc_vac_en,
+                                    "vac_en_entry": matching_entry["vac_en_entry"]
+                                })
                         else:
                                 self.log(f"No valid matching entry found for {defect_name}")
 
-                # Re-save updated vacancy info to job_info.json (so user sees the matched references here as well)
-                self.job_info["all_vacancies"] = all_vac_data
-                save_dict_to_json(self.job_info, self.get_job_info_filename())
+                # 5) Store only matched defects in final_results
+                final_results["vacancy_energy"] = matched_vac
 
-                # Only keep matched entries (vac_en_entry != 0.0) for final_results
-                matched_vacs = [v for v in all_vac_data if v["vac_en_entry"] != 0.0]
-                final_results["vacancy_energy"] = matched_vacs
-
-                # Optionally compute an error metric using matched vacancies
-                vac_en = [v["vac_en"] for v in matched_vacs]
-                vac_ref = [v["vac_en_entry"] for v in matched_vacs]
-                if vac_en and vac_ref:
+                # 6) Optionally compute an error metric if at least one match was found
+                if matched_vac:
+                        vac_en = [v["vac_en"] for v in matched_vac]
+                        vac_ref = [v["vac_en_entry"] for v in matched_vac]
                         err_vac_en = mean_absolute_error(vac_ref, vac_en)
                 else:
                         err_vac_en = np.nan
