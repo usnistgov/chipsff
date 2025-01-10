@@ -200,74 +200,71 @@ class MaterialsAnalyzer:
             dyn.run(fmax=fmax, steps=steps)
         output = log_stream.getvalue().strip()
 
-        final_energy = None
-        if output:
-            last_line = output.split("\n")[-1]
-            match = re.search(
-                r"FIRE:\s+\d+\s+\d+:\d+:\d+\s+(-?\d+\.\d+)", last_line
-            )
-            if match:
-                final_energy = float(match.group(1))
+        last_line = output.split("\n")[-1] if output else ""
+        # Regex to capture the energy in a line like:
+        # "FIRE:   8  0:00:00 -146.123456"
+        match = re.search(r"FIRE:\s+\d+\s+\d+:\d+:\d+\s+(-?\d+\.\d+)", last_line)
+
+        # If there's a match, parse it; otherwise default to 0.0
+        final_energy = float(match.group(1)) if match else 0.0
 
         return final_energy, dyn.nsteps
 
     def relax_structure(self):
-        """Perform structure relaxation and log the process."""
+        """Perform bulk structure relaxation, log the final energy, and save the final structure."""
         self.log(f"Starting relaxation for {self.jid}")
 
-        # Use conventional cell if specified
-
+        # If requested, convert to conventional cell before relaxation
         if self.use_conventional_cell:
             self.log("Using conventional cell for relaxation.")
-            self.atoms = (
-                self.atoms.get_conventional_atoms
-            )  # or appropriate method
+            self.atoms = self.atoms.get_conventional_atoms
 
-        # Convert atoms to ASE format and assign the calculator
-        filter_type = self.bulk_relaxation_settings.get(
-            "filter_type", "ExpCellFilter"
-        )
-        relaxation_settings = self.bulk_relaxation_settings.get(
-            "relaxation_settings", {}
-        )
-        constant_volume = relaxation_settings.get("constant_volume", False)
+        # Convert JARVIS Atoms -> ASE Atoms
         ase_atoms = self.atoms.ase_converter()
         ase_atoms.calc = self.calculator
 
-        if filter_type == "ExpCellFilter":
-            ase_atoms = ExpCellFilter(
-                ase_atoms, constant_volume=constant_volume
-            )
-        else:
-            # Implement other filters if needed
-            pass
-
-        # Run FIRE optimizer and capture the output using relaxation settings
+        # Grab settings
+        filter_type = self.bulk_relaxation_settings.get("filter_type", "ExpCellFilter")
+        relaxation_settings = self.bulk_relaxation_settings.get("relaxation_settings", {})
+        constant_volume = relaxation_settings.get("constant_volume", False)
         fmax = relaxation_settings.get("fmax", 0.05)
         steps = relaxation_settings.get("steps", 200)
-        final_energy, nsteps = self.capture_fire_output(
-            ase_atoms, fmax=fmax, steps=steps
-        )
+
+        # Optional: apply ExpCellFilter for stress/strain relaxation
+        if filter_type == "ExpCellFilter":
+            from ase.constraints import ExpCellFilter
+            ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
+
+        # Run the FIRE optimizer, parsing stdout for the final energy
+        final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
+
+        # Convert back to JARVIS atoms
         relaxed_atoms = ase_to_atoms(ase_atoms.atoms)
+
+        # Check convergence
         converged = nsteps < steps
 
-        # Log the final energy and relaxation status
+        # Log details
         self.log(
-            f"Final energy of FIRE optimization for structure: {final_energy}"
-        )
-        self.log(
-            f"Relaxation {'converged' if converged else 'did not converge'} within {nsteps} steps."
+            f"Bulk relaxation final energy: {final_energy:.4f} eV, steps used: {nsteps}/{steps}, "
+            f"converged: {converged}"
         )
 
-        # Update job info and save the relaxed structure
+        # Store info for downstream tasks
         self.job_info["relaxed_atoms"] = relaxed_atoms.to_dict()
         self.job_info["final_energy_structure"] = final_energy
         self.job_info["converged"] = converged
-        self.log(f"Relaxed structure: {relaxed_atoms}")
-        # self.log(f"Relaxed structure: {relaxed_atoms.to_dict()}")
+
+        # Save final structure, even if unconverged
+        final_poscar_path = os.path.join(self.output_dir, f"{self.jid}_bulk_relaxed.vasp")
+        Poscar(relaxed_atoms).write_file(final_poscar_path)
+        self.log(f"Bulk final structure saved to {final_poscar_path}")
+
+        # Update job info JSON
         save_dict_to_json(self.job_info, self.get_job_info_filename())
 
-        return relaxed_atoms if converged else None
+        # Return final structure for subsequent steps
+        return relaxed_atoms
 
     def calculate_formation_energy(self, relaxed_atoms):
         """
@@ -862,53 +859,58 @@ class MaterialsAnalyzer:
         self.log("Defect analysis completed.")
 
     def relax_defect_structure(self, atoms, name):
-        """Relax the defect structure and log the process."""
+        """Relax the defect structure and log the process, always returning the final structure."""
+
         # Convert atoms to ASE format and assign the calculator
         filter_type = self.defect_settings.get("filter_type", "ExpCellFilter")
-        relaxation_settings = self.defect_settings.get(
-            "relaxation_settings", {}
-        )
+        relaxation_settings = self.defect_settings.get("relaxation_settings", {})
         constant_volume = relaxation_settings.get("constant_volume", True)
+        fmax = relaxation_settings.get("fmax", 0.05)
+        steps = relaxation_settings.get("steps", 200)
+
         ase_atoms = atoms.ase_converter()
         ase_atoms.calc = self.calculator
 
         if filter_type == "ExpCellFilter":
-            ase_atoms = ExpCellFilter(
-                ase_atoms, constant_volume=constant_volume
-            )
+            ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
         else:
             # Implement other filters if needed
             pass
-        fmax = relaxation_settings.get("fmax", 0.05)
-        steps = relaxation_settings.get("steps", 200)
-        # Run FIRE optimizer and capture the output
-        final_energy, nsteps = self.capture_fire_output(
-            ase_atoms, fmax=fmax, steps=steps
-        )
+
+        # Run FIRE optimizer and parse the last line for final energy
+        final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
         relaxed_atoms = ase_to_atoms(ase_atoms.atoms)
-        converged = nsteps < 200
 
-        # Log the final energy and relaxation status
+        # Check if it converged (i.e., nsteps < max allowed)
+        converged = nsteps < steps
+
+        # Log final energy and convergence info
         self.log(
-            f"Final energy of FIRE optimization for defect structure: {final_energy}"
+            f"Final energy of FIRE optimization for defect '{name}': {final_energy} eV"
         )
         self.log(
-            f"Defect relaxation {'converged' if converged else 'did not converge'} within 200 steps."
+            f"Defect relaxation "
+            f"{'converged' if converged else 'did not converge'} "
+            f"within {nsteps} / {steps} steps."
         )
 
-        # Update job info with the final energy and convergence status
+        # Store final defect energy and convergence in job_info
         self.job_info[f"final_energy_defect for {name}"] = final_energy
         self.job_info[f"converged for {name}"] = converged
 
-        if converged:
-            poscar_filename = os.path.join(
-                self.output_dir, f"POSCAR_{name}_relaxed.vasp"
-            )
-            poscar_defect = Poscar(relaxed_atoms)
-            poscar_defect.write_file(poscar_filename)
-            self.log(f"Relaxed defect structure saved to {poscar_filename}")
+        # Always save the final structure (even if unconverged)
+        poscar_filename = os.path.join(
+            self.output_dir, f"POSCAR_{name}_final.vasp"
+        )
+        poscar_defect = Poscar(relaxed_atoms)
+        poscar_defect.write_file(poscar_filename)
+        self.log(f"Defect final structure saved to {poscar_filename}")
 
-        return relaxed_atoms if converged else None
+        # Save updated job info
+        save_dict_to_json(self.job_info, self.get_job_info_filename())
+
+        # Return the final (possibly unconverged) structure
+        return relaxed_atoms
 
     def analyze_surfaces(self):
         """
@@ -1011,55 +1013,49 @@ class MaterialsAnalyzer:
 
     def relax_surface_structure(self, atoms, indices):
         """
-        Relax the surface structure and log the process.
+        Relax a surface structure, log the final energy, and save the final
+        structure even if unconverged.
         """
+        self.log(f"Starting surface relaxation for {self.jid} with Miller indices {indices}")
+
         filter_type = self.surface_settings.get("filter_type", "ExpCellFilter")
-        relaxation_settings = self.surface_settings.get(
-            "relaxation_settings", {}
-        )
+        relaxation_settings = self.surface_settings.get("relaxation_settings", {})
         constant_volume = relaxation_settings.get("constant_volume", True)
-        self.log(
-            f"Starting surface relaxation for {self.jid} with indices {indices}"
-        )
-        start_time = time.time()
         fmax = relaxation_settings.get("fmax", 0.05)
         steps = relaxation_settings.get("steps", 200)
-        # Convert atoms to ASE format and assign the calculator
+
+        # Convert JARVIS Atoms -> ASE Atoms
         ase_atoms = atoms.ase_converter()
         ase_atoms.calc = self.calculator
+
         if filter_type == "ExpCellFilter":
-            ase_atoms = ExpCellFilter(
-                ase_atoms, constant_volume=constant_volume
-            )
-        else:
-            # Implement other filters if needed
-            pass
-        # Run FIRE optimizer and capture the output
-        final_energy, nsteps = self.capture_fire_output(
-            ase_atoms, fmax=fmax, steps=steps
-        )
-        relaxed_atoms = ase_to_atoms(ase_atoms.atoms)
-        converged = nsteps < 200
+            from ase.constraints import ExpCellFilter
+            ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
 
-        # Log relaxation results
+        final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
+        relaxed_surf_atoms = ase_to_atoms(ase_atoms.atoms)
+
+        converged = nsteps < steps
         self.log(
-            f"Final energy of FIRE optimization for surface structure: {final_energy}"
-        )
-        self.log(
-            f"Surface relaxation {'converged' if converged else 'did not converge'} within {nsteps} steps."
+            f"Surface {indices}, final energy: {final_energy:.4f} eV, "
+            f"steps: {nsteps}/{steps}, converged: {converged}"
         )
 
-        end_time = time.time()
-        self.log(
-            f"Surface Relaxation Calculation time: {end_time - start_time} seconds"
-        )
-
-        # Update job info and return relaxed atoms if converged, otherwise return None
+        # Store info
         self.job_info[f"final_energy_surface_{indices}"] = final_energy
         self.job_info[f"converged_surface_{indices}"] = converged
 
-        # Return both relaxed atoms and the final energy as a tuple
-        return (relaxed_atoms if converged else None), final_energy
+        # Save final surface structure
+        poscar_filename = os.path.join(
+            self.output_dir, f"POSCAR_surface_{self.jid}_{indices}_final.vasp"
+        )
+        Poscar(relaxed_surf_atoms).write_file(poscar_filename)
+        self.log(f"Surface final structure saved to {poscar_filename}")
+
+        # Update job info JSON
+        save_dict_to_json(self.job_info, self.get_job_info_filename())
+
+        return relaxed_surf_atoms, final_energy
 
     def calculate_surface_energy(
         self, final_energy, bulk_energy, relaxed_atoms, surface
