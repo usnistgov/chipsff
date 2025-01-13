@@ -43,6 +43,11 @@ def setup_calculator(calculator_type, calculator_settings):
 
         return AlignnAtomwiseCalculator()
 
+    elif calculator_type == "mattersim":
+        from mattersim.forcefield import MatterSimCalculator
+
+        return MatterSimCalculator(load_path="MatterSim-v1.0.0-5M.pth", device="cpu")
+
     elif calculator_type == "chgnet":
         from chgnet.model.dynamics import CHGNetCalculator
 
@@ -51,7 +56,17 @@ def setup_calculator(calculator_type, calculator_settings):
     elif calculator_type == "mace":
         from mace.calculators import mace_mp
 
-        return mace_mp()
+        return mace_mp(model="medium")
+
+    elif calculator_type == "mace-mpa":
+        from mace.calculators import mace_mp
+
+        return mace_mp(model="medium-mpa-0")
+
+    elif calculator_type == "mace-d3":
+        from mace.calculators import mace_mp
+
+        return mace_mp(dispersion=True)
 
     elif calculator_type == "mace-alexandria":
         from mace.calculators.mace import MACECalculator
@@ -79,6 +94,14 @@ def setup_calculator(calculator_type, calculator_settings):
         from orb_models.forcefield.calculator import ORBCalculator
 
         orbff = pretrained.orb_v2()
+        device = calculator_settings.get("device", "cpu")
+        return ORBCalculator(orbff, device=device)
+
+    elif calculator_type == "orb-d3-v2":
+        from orb_models.forcefield import pretrained
+        from orb_models.forcefield.calculator import ORBCalculator
+
+        orbff = pretrained.orb_d3_v2()
         device = calculator_settings.get("device", "cpu")
         return ORBCalculator(orbff, device=device)
 
