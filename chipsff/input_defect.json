@@ -6,6 +6,14 @@
     "calculate_ev_curve",
     "analyze_defects"
   ],
+  "bulk_relaxation_settings": {
+  "filter_type": "ExpCellFilter",
+  "relaxation_settings": {
+    "fmax": 0.05,
+    "steps": 200,
+    "constant_volume": false
+  }
+},
   "defect_settings": {
     "generate_settings": {
       "on_conventional_cell": true,
