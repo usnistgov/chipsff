@@ -1,0 +1,5 @@
+{
+  "mlearn_elements": ["Si","Ge","Cu","Ni","Li","Mo"],
+  "calculator_type": "chgnet",
+  "properties_to_calculate": ["compare_mlearn_forces"]
+}
