@@ -1,0 +1,11 @@
+{
+  "film_jid": ["JVASP-21"],
+  "substrate_jid": ["JVASP-961"],
+  "calculator_type": "chgnet",
+  "chemical_potentials_file": "chemical_potentials.json",
+  "film_index": "1_0_0",
+  "substrate_index": "1_1_1",
+  "properties_to_calculate": [
+    "analyze_interfaces"
+  ]
+}
