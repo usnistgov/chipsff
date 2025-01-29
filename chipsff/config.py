@@ -4,18 +4,22 @@ from pydantic import Field
 
 
 class CHIPSFFConfig(BaseSettings):
+    structure_path: Optional[str] = Field(
+        default=None,
+        description="Local file path to a CIF or POSCAR/vasp file."
+    )
     jid: Optional[str] = None
     jid_list: Optional[List[str]] = None
     calculator_type: Optional[str] = (
-        None  # Changed to Optional to allow multiple calculators
+        None  
     )
     calculator_types: Optional[List[str]] = (
-        None  # Optional list for multiple calculators
+        None  
     )
     chemical_potentials_file: str = "chemical_potentials.json"
-    film_id: Optional[List[str]] = None
+    film_jid: Optional[List[str]] = None
     film_index: str = "0_0_1"
-    substrate_id: Optional[List[str]] = None
+    substrate_jid: Optional[List[str]] = None
     substrate_index: str = "0_0_1"
     use_conventional_cell: Optional[bool] = False
 
@@ -148,3 +152,4 @@ class CHIPSFFConfig(BaseSettings):
         default_factory=lambda: [],
         description="List of calculator types to test in the scaling analysis",
     )
+
