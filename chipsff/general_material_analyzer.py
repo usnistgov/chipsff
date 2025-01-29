@@ -40,11 +40,29 @@ from chipsff.utils import (
 # vacancydb = data("vacancydb")
 # surface_data = data("surfacedb")
 
+def get_atoms_from_file(path):
+    """Utility to read a CIF or POSCAR/vasp file into a jarvis.core.atoms.Atoms object."""
+
+    path_lower = path.lower()
+    if path_lower.endswith(".cif"):
+        # jarvis.io.cif.read_cif can return a single Atoms or a list of Atoms
+        atoms_list = Atoms.from_cif(path)
+        if isinstance(atoms_list, list):
+            return atoms_list[0]  # If multiple blocks, take the first
+        else:
+            return atoms_list
+    elif path_lower.endswith(".vasp") or "poscar" in path_lower:
+        # read using jarvis.io.vasp
+        poscar = Poscar.from_file(path)
+        return poscar.atoms
+    else:
+        raise ValueError(f"Unsupported file extension for {path}.")
 
 class MaterialsAnalyzer:
     def __init__(
         self,
         jid=None,
+        structure_path=None,
         calculator_type=None,
         chemical_potentials_file=None,
         film_jid=None,
@@ -63,6 +81,9 @@ class MaterialsAnalyzer:
         dataset=[],
         id_tag="jid",
     ):
+        self.jid = None
+        self.film_jid = None
+        self.substrate_jid = None
         self.calculator_type = calculator_type
         self.use_conventional_cell = use_conventional_cell
         self.chemical_potentials_file = chemical_potentials_file
@@ -94,7 +115,25 @@ class MaterialsAnalyzer:
             "min_size": 10.0,
         }
         self.calculator_settings = calculator_settings or {}
-        if jid:
+
+        if structure_path is not None:
+        # 1) Local file mode
+            if not os.path.isfile(structure_path):
+                raise FileNotFoundError(f"File not found: {structure_path}")
+            self.jid = None  # no JID in this mode
+            self.atoms = get_atoms_from_file(structure_path)
+            self.reference_data = {}  # or skip if no reference_data
+            # Create output directory based on file name
+            base_name = os.path.splitext(os.path.basename(structure_path))[0]
+            self.jid = base_name
+            self.reference_data = {}
+            self.output_dir = f"{base_name}_{calculator_type}"
+            os.makedirs(self.output_dir, exist_ok=True)
+            self.log_file = os.path.join(self.output_dir, f"{base_name}_job_log.txt")
+            self.job_info = {"structure_path": structure_path, "calculator_type": calculator_type}
+            self.calculator = self.setup_calculator()
+            self.chemical_potentials = self.load_chemical_potentials()
+        elif jid:
             self.jid = jid
             # Load atoms for the given JID
             self.atoms = self.get_atoms(jid)
@@ -139,7 +178,8 @@ class MaterialsAnalyzer:
             self.chemical_potentials = self.load_chemical_potentials()
         else:
             raise ValueError(
-                "Either 'jid' or both 'film_jid' and 'substrate_jid' must be provided."
+                "Must provide either 'structure_path', or a 'jid', "
+                "or both 'film_jid' and 'substrate_jid'."
             )
 
         # Set up the logger
@@ -152,15 +192,19 @@ class MaterialsAnalyzer:
         raise ValueError(f"JID {jid} not found in the database")
 
     def setup_logger(self):
+        # Try jid first, else film_jid/substrate_jid, else a default
+        if self.jid:
+            logger_name = self.jid
+        elif hasattr(self, "film_jid") and hasattr(self, "substrate_jid"):
+            logger_name = f"{self.film_jid}_{self.substrate_jid}"
+        else:
+            logger_name = "local_file_calc"
 
-        self.logger = logging.getLogger(
-            self.jid or f"{self.film_jid}_{self.substrate_jid}"
-        )
+        self.logger = logging.getLogger(logger_name)
         self.logger.setLevel(logging.INFO)
+    
         fh = logging.FileHandler(self.log_file)
-        formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(message)s"
-        )
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         fh.setFormatter(formatter)
         self.logger.addHandler(fh)
 
@@ -1543,7 +1587,19 @@ class MaterialsAnalyzer:
         return supercell_dims
 
     def analyze_interfaces(self):
-        """Perform interface analysis using intermat package."""
+        """
+        Perform interface analysis in two steps:
+          (A) Z-scan (vary the vertical separation) with no XY shifts,
+          (B) XY scan at the best z-separation from step (A).
+
+        Uses the intermat package and saves both the Z-scan and XY-scan results.
+        """
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from intermat.generate import InterfaceCombi
+        from jarvis.io.vasp.inputs import Poscar
+        from jarvis.db.figshare import get_jid_data
+        # 1) Basic checks
         if not self.film_jid or not self.substrate_jid:
             self.log(
                 "Film JID or substrate JID not provided, skipping interface analysis."
@@ -1553,96 +1609,190 @@ class MaterialsAnalyzer:
         self.log(
             f"Starting interface analysis between {self.film_jid} and {self.substrate_jid}"
         )
-
-        # Ensure the output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
 
-        # Prepare config
+        # 2) Prepare the interface config
         config = {
             "film_jid": self.film_jid,
             "substrate_jid": self.substrate_jid,
             "film_index": self.film_index,
             "substrate_index": self.substrate_index,
-            "disp_intvl": 0.05,
+            "disp_intvl": 0.05,         # We'll do an XY scan at 0.05 intervals
+            "z_seps": [0.5, 4.5, 0.1],  # Z-scan from 0.5 to 4.5 in increments of 0.1
             "calculator_method": self.calculator_type.lower(),
+            "vacuum_interface": 2.0,
+            "max_area": 300,
+            "ltol": 0.08,
         }
 
         config_filename = os.path.join(
             self.output_dir,
-            f"config_{self.film_jid}_{self.film_index}_{self.substrate_jid}_{self.substrate_index}_{self.calculator_type}.json",
+            f"config_{self.film_jid}_{self.film_index}_"
+            f"{self.substrate_jid}_{self.substrate_index}_{self.calculator_type}.json",
         )
-
-        # Save config file
         save_dict_to_json(config, config_filename)
         self.log(f"Config file created: {config_filename}")
 
-        # Run intermat script using subprocess in self.output_dir
-        command = f"run_intermat.py --config_file {os.path.basename(config_filename)}"
-        self.log(f"Running command: {command}")
+        # 3) Pull out atoms from JIDs (assuming self.get_atoms() returns Jarvis Atoms)
+        film_atoms = self.get_atoms(self.film_jid)
+        subs_atoms = self.get_atoms(self.substrate_jid)
 
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                check=True,
-                capture_output=True,
-                text=True,
-                cwd=self.output_dir,  # Set the working directory for the subprocess
-            )
-            self.log(f"Command output: {result.stdout}")
-        except subprocess.CalledProcessError as e:
-            self.log(f"Command failed with error: {e.stderr}")
-            return
+        # 4) Step (A): Perform Z-scan with disp_intvl=0.0
+        z_range = np.arange(*config["z_seps"])  # e.g. np.arange(0.5, 4.5, 0.1)
+        self.log("Running Z-scan (vertical separation) for interface...")
+       
+        def str_to_list(index_str):
+            indices = [int(x) for x in index_str.split('_')]
+            print(f"Converted {index_str} to {indices}")  # Debug print
+            return indices
 
-        # After execution, check for outputs in self.output_dir
-        main_results_filename = os.path.join(
-            self.output_dir, "intermat_results.json"
+        film_indices = str_to_list(config["film_index"])
+        subs_indices = str_to_list(config["substrate_index"])
+        x_zscan = InterfaceCombi(
+            film_indices=[film_indices],
+            subs_indices=[subs_indices],
+            vacuum_interface=config["vacuum_interface"],
+            film_mats=[film_atoms],
+            subs_mats=[subs_atoms],
+            disp_intvl=0.0,          # no XY shift
+            seperations=z_range,
+            from_conventional_structure_film=True,
+            from_conventional_structure_subs=True,
+            max_area=config["max_area"],
+            ltol=config["ltol"],
+            dataset=[None],
         )
-        if not os.path.exists(main_results_filename):
-            self.log(f"Results file not found: {main_results_filename}")
-            return
+        extra_params = {}
+        extra_params["alignn_params"] = {}
+        extra_params["alignn_params"]["model_path"] = "ALIGNN_FF_PATH"
 
-        res = load_dict_from_json(main_results_filename)
-        w_adhesion = res.get("wads", [])
-        systems_info = res.get("systems", {})
+        wads_zscan = x_zscan.calculate_wad(
+            method=config["calculator_method"],
+            extra_params=extra_params
+        )
+        wads_zscan = np.array(wads_zscan)
 
-        # Handle intmat.png
-        intmat_filename = os.path.join(self.output_dir, "intmat.png")
-        if os.path.exists(intmat_filename):
-            new_intmat_filename = os.path.join(
-                self.output_dir,
-                f"intmat_{self.film_jid}_{self.film_index}_{self.substrate_jid}_{self.substrate_index}_{self.calculator_type}.png",
-            )
-            os.rename(intmat_filename, new_intmat_filename)
-            self.job_info["intmat_plot"] = new_intmat_filename
-            self.log(f"intmat.png saved as {new_intmat_filename}")
-        else:
-            self.log("intmat.png not found.")
+        # 5) Plot & save Z-scan results
+        zscan_plot = os.path.join(self.output_dir, "z_scan.png")
+        plt.figure()
+        plt.plot(z_range, wads_zscan, "o-")
+        plt.xlabel("Z-separation (Å)")
+        plt.ylabel("Wad (J/m²)")
+        plt.title("Z-scan of Interface Adhesion Energy")
+        plt.savefig(zscan_plot)
+        plt.close()
+        self.log(f"Z-scan plot saved to {zscan_plot}")
 
-        if "wads" in res:
-            # Save additional plots or data as needed
-            self.job_info["interface_scan_results"] = main_results_filename
-            self.job_info["w_adhesion"] = w_adhesion
-            self.job_info["systems_info"] = systems_info
-            self.log(
-                f"Interface scan results saved to {main_results_filename}"
-            )
-            self.log(f"w_adhesion: {w_adhesion}")
-            self.log(f"systems_info: {systems_info}")
-            save_dict_to_json(self.job_info, self.get_job_info_filename())
-        else:
-            self.log(f"No 'wads' key in results file: {main_results_filename}")
+        # Also save the numerical data
+        zscan_data = {
+            "z_range": z_range.tolist(),
+            "wads_zscan": wads_zscan.tolist(),
+        }
+        zscan_file = os.path.join(self.output_dir, "z_scan_results.json")
+        save_dict_to_json(zscan_data, zscan_file)
+        self.log(f"Z-scan data saved to {zscan_file}")
+
+        # 6) Find best z separation
+        idx_min = np.argmin(wads_zscan)
+        best_z = z_range[idx_min]
+        best_z_wad = wads_zscan[idx_min]
+        self.log(f"Best z separation found: {best_z:.2f} Å with Wad={best_z_wad:.3f} J/m²")
+
+        # Update job_info with z-scan summary
+        self.job_info["z_scan_summary"] = {
+            "best_z": float(best_z),
+            "best_z_wad": float(best_z_wad),
+        }
+
+        # 7) Step (B): XY-scan at best_z
+        self.log("Running XY-scan at best z separation...")
+        x_xyscan = InterfaceCombi(
+            film_indices=[film_indices],
+            subs_indices=[subs_indices],
+            vacuum_interface=config["vacuum_interface"],
+            film_mats=[film_atoms],
+            subs_mats=[subs_atoms],
+            disp_intvl=config["disp_intvl"],  # e.g. 0.05
+            seperations=[best_z],
+            from_conventional_structure_film=True,
+            from_conventional_structure_subs=True,
+            max_area=config["max_area"],
+            ltol=config["ltol"],
+            dataset=[None],
+        )
+        wads_2d = x_xyscan.calculate_wad(
+            method=config["calculator_method"],
+            extra_params=extra_params
+        )
+        wads_2d = np.array(wads_2d)
+
+        # 2D contour data
+        X = x_xyscan.X
+        Y = x_xyscan.Y
+        wads_2d = wads_2d.reshape(len(X), len(Y))
+
+        # Plot contour
+        xy_plot = os.path.join(self.output_dir, "xy_scan.png")
+        plt.figure()
+        cf = plt.contourf(X, Y, wads_2d, cmap="coolwarm")
+        plt.colorbar(cf, label="Wad (J/m²)")
+        plt.xlabel("X shift (Å)")
+        plt.ylabel("Y shift (Å)")
+        plt.title(f"XY-scan at Z={best_z:.2f} Å")
+        plt.savefig(xy_plot)
+        plt.close()
+        self.log(f"XY-scan contour plot saved to {xy_plot}")
+
+        # Save the 2D data
+        xy_data = {
+            "X": X.tolist(),
+            "Y": Y.tolist(),
+            "wads_2d": wads_2d.tolist(),
+            "best_z": float(best_z),
+        }
+        xy_file = os.path.join(self.output_dir, "xy_scan_results.json")
+        save_dict_to_json(xy_data, xy_file)
+        self.log(f"XY-scan data saved to {xy_file}")
+
+        # 8) Final logging
+        self.log(
+            f"Completed interface analysis (z-scan + xy-scan) for {self.film_jid}_{self.substrate_jid}."
+        )
+        # Update self.job_info, save final job info
+        self.job_info["xy_scan_summary"] = {
+            "best_z": float(best_z),
+            "wads_2d_shape": [len(X), len(Y)],
+        }
+        save_dict_to_json(self.job_info, self.get_job_info_filename())
 
     def get_job_info_filename(self):
-        if hasattr(self, "jid") and self.jid:
+        # 1) If we have a JID:
+        if self.jid:
             return os.path.join(
                 self.output_dir,
                 f"{self.jid}_{self.calculator_type}_job_info.json",
             )
-        else:
+
+
+        elif getattr(self, "film_jid", None) is not None and getattr(self, "substrate_jid", None) is not None:
             return os.path.join(
                 self.output_dir,
-                f"Interface_{self.film_jid}_{self.film_index}_{self.substrate_jid}_{self.substrate_index}_{self.calculator_type}_job_info.json",
+                f"Interface_{self.film_jid}_{self.film_index}_"
+                f"{self.substrate_jid}_{self.substrate_index}_{self.calculator_type}_job_info.json",
+            )
+
+        # 3) If we have a local-file scenario
+        elif getattr(self, "structure_path", None) is not None:
+            base_name = os.path.splitext(os.path.basename(self.structure_path))[0]
+            return os.path.join(
+                self.output_dir,
+                f"{base_name}_{self.calculator_type}_job_info.json"
+            )
+
+        else:
+            # If we somehow have none of the above
+            raise ValueError(
+                "No valid identifier (jid, film_jid/substrate_jid, or structure_path) found!"
             )
 
     def run_all(self):
