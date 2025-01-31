@@ -939,6 +939,111 @@ class MaterialsAnalyzer:
         # Return the final (possibly unconverged) structure
         return relaxed_atoms
 
+    def analyze_defects_from_db(self):
+        """
+        Load vacancy defect structures directly from the vacancydb for the current JID,
+        relax them with the same approach as 'analyze_defects', and compare
+        the final energies to the reference formation energies in the database.
+
+        This gives a 1:1 comparison with the known data in vacancydb.
+        """
+        from jarvis.db.figshare import data
+        from jarvis.core.atoms import Atoms, ase_to_atoms
+        import numpy as np
+        from sklearn.metrics import mean_absolute_error
+        import os
+
+        # 1) Load the entire vacancy dataset
+        vacancydb = data("vacancydb")
+
+        # 2) Filter for entries matching our current JID
+        matched_defects = [d for d in vacancydb if d["jid"] == self.jid]
+        if not matched_defects:
+            self.log(f"No defect data found in vacancydb for JID={self.jid}. Skipping.")
+            return
+
+        self.log(f"Found {len(matched_defects)} defects in vacancydb for {self.jid}.")
+        all_vac_data = []
+        
+        # 3) Loop over each defect entry from the DB
+        for defect_entry in matched_defects:
+            # 'atoms' should be the full defect supercell
+            defect_atoms_db = Atoms.from_dict(defect_entry["defective_atoms"])
+            # 'symbol' is typically the removed element for a vacancy
+            symbol_removed = defect_entry.get("symbol", "X")
+            # The reference 'ef' is the vacancy formation energy from the database
+            ref_formation_energy = defect_entry.get("ef", None)
+
+            if ref_formation_energy is None:
+                self.log(f"Defect entry has no 'ef' (formation energy) for {symbol_removed}. Skipping.")
+                continue
+
+            # 4) Relax the defect structure using our usual method
+            defect_name = f"{self.jid}_{symbol_removed}_db"
+            relaxed_defect_atoms = self.relax_defect_structure(defect_atoms_db, name=defect_name)
+            if relaxed_defect_atoms is None:
+                self.log(f"Failed to relax defect for {defect_name}. Skipping.")
+                continue
+
+            # 5) Extract the final defect energy from job_info
+            final_defect_energy = self.job_info.get(f"final_energy_defect for {defect_name}", None)
+            if final_defect_energy is None:
+                self.log(f"No final defect energy found in job_info for {defect_name}.")
+                continue
+
+            # 6) Compute the vacancy formation energy with your chosen approach
+            n_defect_atoms = defect_atoms_db.num_atoms  # with vacancy removed
+            # Original supercell had (n_defect_atoms + 1) before removing that element
+
+            eq_energy = self.job_info.get("equilibrium_energy", None)
+            if eq_energy is None:
+                self.log("No equilibrium_energy found in job_info. Cannot compute formation energy.")
+                continue
+
+            N_bulk = self.atoms.num_atoms  # how many atoms in your bulk cell
+            E_bulk_per_atom = eq_energy / N_bulk
+
+            E_bulk_equiv = E_bulk_per_atom * (n_defect_atoms + 1)
+
+            # Chemical potential for removed element
+            mu_removed = self.get_chemical_potential(symbol_removed)
+            if mu_removed is None:
+                self.log(f"Chemical potential for {symbol_removed} is missing. Skipping formation energy calc.")
+                continue
+
+            calc_formation_energy = final_defect_energy - E_bulk_equiv + mu_removed
+
+            # 7) Compare to the reference from the DB
+            self.log(
+                f"Vacancy formation energy for {defect_name} = "
+                f"{calc_formation_energy:.3f} eV (DB reference = {ref_formation_energy:.3f} eV)"
+            )
+
+            # Store results
+            all_vac_data.append({
+                "defect_name": defect_name,
+                "calc_vac_form_en": calc_formation_energy,
+                "ref_vac_form_en": ref_formation_energy
+            })
+
+        # 8) Optionally compute a mean absolute error across all matched defects
+        if all_vac_data:
+            calc_vals = [x["calc_vac_form_en"] for x in all_vac_data]
+            ref_vals = [x["ref_vac_form_en"] for x in all_vac_data]
+            err_vac = mean_absolute_error(ref_vals, calc_vals)
+            self.log(f"MAE in vacancy formation energies vs. DB reference = {err_vac:.3f} eV")
+
+            # 9) Store results in job_info
+            self.job_info["db_vacancies"] = all_vac_data
+            self.job_info["db_vacancies_mae"] = err_vac
+
+            from chipsff.utils import save_dict_to_json
+            save_dict_to_json(self.job_info, self.get_job_info_filename())
+        else:
+            self.log("No valid vacancy entries were processed from the DB.")
+
+
+
     def analyze_surfaces(self):
         """
         Perform surface analysis by generating surface structures, relaxing them,
@@ -1956,7 +2061,8 @@ class MaterialsAnalyzer:
                         err_vac_en = mean_absolute_error(vac_ref, vac_en)
                 else:
                         err_vac_en = np.nan
-
+        if "analyze_defects_from_db" in self.properties_to_calculate:
+            self.analyze_defects_from_db()
         # -----------------------------------------------
         # Surface energy analysis
         # -----------------------------------------------
