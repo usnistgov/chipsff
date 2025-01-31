@@ -11,10 +11,10 @@ class CHIPSFFConfig(BaseSettings):
     jid: Optional[str] = None
     jid_list: Optional[List[str]] = None
     calculator_type: Optional[str] = (
-        None  
+        None  # Changed to Optional to allow multiple calculators
     )
     calculator_types: Optional[List[str]] = (
-        None  
+        None  # Optional list for multiple calculators
     )
     chemical_potentials_file: str = "chemical_potentials.json"
     film_jid: Optional[List[str]] = None
@@ -130,6 +130,7 @@ class CHIPSFFConfig(BaseSettings):
             "run_phonon_analysis",
             "analyze_surfaces",
             "analyze_defects",
+            "analyze_defects_from_db",
             "run_phonon3_analysis",
             "general_melter",
             "compare_mlearn_forces",
@@ -152,4 +153,3 @@ class CHIPSFFConfig(BaseSettings):
         default_factory=lambda: [],
         description="List of calculator types to test in the scaling analysis",
     )
-
