@@ -234,6 +234,9 @@ class MaterialsAnalyzer:
         if filter_type == "ExpCellFilter":
             from ase.constraints import ExpCellFilter
             ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
+        elif filter_type == "FrechetCellFilter":
+            from ase.filters import FrechetCellFilter
+            ase_atoms = FrechetCellFilter(ase_atoms, constant_volume=constant_volume)
 
         # Run the FIRE optimizer, parsing stdout for the final energy
         final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
@@ -856,6 +859,9 @@ class MaterialsAnalyzer:
 
         if filter_type == "ExpCellFilter":
             ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
+        elif filter_type == "FrechetCellFilter":
+            from ase.filters import FrechetCellFilter
+            ase_atoms = FrechetCellFilter(ase_atoms, constant_volume=constant_volume)
         else:
             # Implement other filters if needed
             pass
@@ -989,6 +995,9 @@ class MaterialsAnalyzer:
         if filter_type == "ExpCellFilter":
             from ase.constraints import ExpCellFilter
             ase_atoms = ExpCellFilter(ase_atoms, constant_volume=constant_volume)
+        elif filter_type == "FrechetCellFilter":
+            from ase.filters import FrechetCellFilter
+            ase_atoms = FrechetCellFilter(ase_atoms, constant_volume=constant_volume)
 
         final_energy, nsteps = self.capture_fire_output(ase_atoms, fmax=fmax, steps=steps)
         relaxed_surf_atoms = ase_to_atoms(ase_atoms.atoms)
