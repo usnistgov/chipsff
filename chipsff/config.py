@@ -4,6 +4,10 @@ from pydantic import Field
 
 
 class CHIPSFFConfig(BaseSettings):
+    structure_path: Optional[str] = Field(
+        default=None,
+        description="Local file path to a CIF or POSCAR/vasp file."
+    )
     jid: Optional[str] = None
     jid_list: Optional[List[str]] = None
     calculator_type: Optional[str] = (
@@ -13,9 +17,9 @@ class CHIPSFFConfig(BaseSettings):
         None  # Optional list for multiple calculators
     )
     chemical_potentials_file: str = "chemical_potentials.json"
-    film_id: Optional[List[str]] = None
+    film_jid: Optional[List[str]] = None
     film_index: str = "0_0_1"
-    substrate_id: Optional[List[str]] = None
+    substrate_jid: Optional[List[str]] = None
     substrate_index: str = "0_0_1"
     use_conventional_cell: Optional[bool] = False
 
@@ -126,6 +130,7 @@ class CHIPSFFConfig(BaseSettings):
             "run_phonon_analysis",
             "analyze_surfaces",
             "analyze_defects",
+            "analyze_defects_from_db",
             "run_phonon3_analysis",
             "general_melter",
             "compare_mlearn_forces",
