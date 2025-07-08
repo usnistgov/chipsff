@@ -1,5 +1,5 @@
 {
-  "jid_list":["JVASP-1002","JVASP-1174"], 
+  "jid_list":["JVASP-1002"], 
   "calculator_types": ["chgnet"],
   "properties_to_calculate": [
     "relax_structure",
