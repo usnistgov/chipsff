@@ -1,12 +1,12 @@
 {
   "jid_list":["JVASP-1002","JVASP-1174"], 
-  "calculator_types": ["chgnet", "alignn_ff"],
+  "calculator_types": ["chgnet"],
   "properties_to_calculate": [
     "relax_structure",
     "calculate_ev_curve"
   ],
 "bulk_relaxation_settings": {
-  "filter_type": "FrechetCellFilter",
+  "filter_type": "ExpCellFilter",
   "relaxation_settings": {
     "fmax": 0.05,
     "steps": 200,
