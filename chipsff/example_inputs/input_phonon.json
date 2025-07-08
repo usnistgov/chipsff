@@ -6,7 +6,7 @@
     "run_phonon_analysis"
   ],
 "bulk_relaxation_settings": {
-  "filter_type": "FrechetCellFilter",
+  "filter_type": "ExpCellFilter",
   "relaxation_settings": {
     "fmax": 0.05,
     "steps": 200,
