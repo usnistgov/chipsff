@@ -1,13 +1,13 @@
 {
-  "jid_list":["JVASP-1002"], 
-  "calculator_types": ["alignn_ff", "chgnet"],
+  "jid_list":["JVASP-1002","JVASP-1174"], 
+  "calculator_types": ["chgnet"],
   "properties_to_calculate": [
     "relax_structure",
     "calculate_ev_curve",
     "analyze_surfaces"
   ],
 "bulk_relaxation_settings": {
-  "filter_type": "FrechetCellFilter",
+  "filter_type": "ExpCellFilter",
   "relaxation_settings": {
     "fmax": 0.05,
     "steps": 200,
@@ -27,6 +27,6 @@
       "steps": 200,
       "constant_volume": true
     },
-    "filter_type": "FrechetCellFilter"
+    "filter_type": "ExpCellFilter"
   }
 }
