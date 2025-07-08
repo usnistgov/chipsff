@@ -17,9 +17,9 @@
   "md_settings": {
     "dt": 1,
     "temp0": 6000,
-    "nsteps0": 100,
+    "nsteps0": 300,
     "temp1": 300,
-    "nsteps1": 100,
+    "nsteps1": 300,
     "taut": 20,
     "min_size": 10.0
   }
